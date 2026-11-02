@@ -1,0 +1,8 @@
+[global]
+# Paragraphs stay on one line; editors soft-wrap, and diffs stay readable.
+disable = ["MD013"]
+
+[MD060]
+# Align table columns so tables read cleanly as plain text.
+enabled = true
+style = "aligned"

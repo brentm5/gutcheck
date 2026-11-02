@@ -1,0 +1,17 @@
+[package]
+name = "gutcheck"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "Ask TypeSafe's Jev model quick, structured questions from the shell or over MCP"
+license = "Apache-2.0"
+repository = "https://github.com/brentm5/gutcheck"
+readme = "README.md"
+publish = false
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+predicates = "3.1.4"

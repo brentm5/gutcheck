@@ -1,0 +1,35 @@
+[tools]
+rumdl = "0.3.2"
+rust = { version = "1.99.1", components = "clippy,rustfmt" }
+
+[tasks."lint:md"]
+description = "Lint Markdown files"
+run = "rumdl check ."
+
+[tasks."fmt:md"]
+description = "Format Markdown files"
+run = "rumdl fmt ."
+
+[tasks."lint:rust"]
+description = "Lint Rust code with clippy (warnings are errors)"
+run = "cargo clippy --all-targets -- -D warnings"
+
+[tasks."fmt:rust"]
+description = "Format Rust code"
+run = "cargo fmt"
+
+[tasks.lint]
+description = "Run all linters"
+depends = ["lint:md", "lint:rust"]
+
+[tasks.fmt]
+description = "Run all formatters"
+depends = ["fmt:md", "fmt:rust"]
+
+[tasks.build]
+description = "Build the release binary (target/release/gutcheck)"
+run = "cargo build --release"
+
+[tasks.test]
+description = "Run all tests"
+run = "cargo test"
