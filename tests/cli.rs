@@ -83,7 +83,7 @@ async fn auth_validate_succeeds_with_a_working_key() {
     auth_validate(&config_for(&server))
         .assert()
         .success()
-        .stdout("{\"valid\": true}\n")
+        .stdout("")
         .stderr("");
 }
 

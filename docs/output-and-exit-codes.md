@@ -2,7 +2,7 @@
 
 > **Status:** draft.
 
-Keep it simple to start: every command prints JSON on success, and exit codes only say whether it worked. Scripts do any further parsing themselves (for example with `jq`).
+Keep it simple to start: commands that return data print JSON on success, and exit codes only say whether it worked. Scripts do any further parsing themselves (for example with `jq`).
 
 ## Exit codes
 
@@ -21,7 +21,7 @@ Output goes to stdout as a single line of JSON.
 | ------------------------------------ | ------------------------------------------------------------------ |
 | `gutcheck ask choice / score / noul` | The answer object for the question, exactly as the API returned it |
 | `gutcheck ask raw` (future)          | The full API response                                              |
-| `gutcheck auth validate`             | `{"valid": true}`                                                  |
+| `gutcheck auth validate`             | Nothing. The exit code is the answer                               |
 | `gutcheck skill`                     | The skill Markdown (not JSON)                                      |
 
 The `ask` subcommands send one question, so they print just that answer, not the full response with `model`, `usage` and the question ID. Examples:

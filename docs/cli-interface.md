@@ -43,7 +43,7 @@ Output format and exit codes are covered in [`output-and-exit-codes.md`](output-
 
 ### `gutcheck auth validate`
 
-Checks that `TYPESAFE_API_KEY` is set and accepted by the API. It exits 0 if the key works and 1 with an error message if it doesn't. It calls `GET /v1/models`, which needs a valid key but doesn't run the model.
+Checks that `TYPESAFE_API_KEY` is set and accepted by the API. It prints nothing and exits 0 if the key works, and exits 1 with an error message if it doesn't. It calls `GET /v1/models`, which needs a valid key but doesn't run the model.
 
 ### `gutcheck mcp serve`
 

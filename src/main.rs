@@ -1,4 +1,3 @@
-use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -119,10 +118,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
             command: AuthCommand::Validate,
         } => {
             let client = Client::new(&settings, &api_key_from_env()?)?;
-            client.validate_auth().await?;
-            // The key is valid whether or not anything is still reading stdout.
-            let _ = writeln!(io::stdout(), r#"{{"valid": true}}"#);
-            Ok(())
+            client.validate_auth().await
         }
     }
 }
