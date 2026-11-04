@@ -52,17 +52,21 @@ Things we leave to the API: nesting depth, the model's context length, whether t
 
 TypeSafe returns these errors. The response bodies are defined in the OpenAPI spec.
 
-| Status                                           | Meaning                                                                                                                         | Body                                                       | What we do                                                                                           |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `400`                                            | Breaks a request rule (invalid UTF-8, nesting, non-finite number) or exceeds the model's context length (`max_tokens_exceeded`) | `{ "detail": string or object }`                           | Report `detail`. Do not retry                                                                        |
-| `401`                                            | Missing or invalid API key                                                                                                      | —                                                          | Report "invalid or missing API key" and point to `gutcheck auth validate`. Do not retry              |
-| `413`                                            | Body over 32 MiB                                                                                                                | —                                                          | Report the size limit. Do not retry. Local checks should normally catch this first                   |
-| `415`                                            | Unsupported compression                                                                                                         | —                                                          | Should never happen, since we control encoding. Report as an internal error                          |
-| `422`                                            | Validation failed                                                                                                               | `{ "detail": [{ "loc", "msg", "type", "input", "ctx" }] }` | Report each entry as `<loc>: <msg>`, e.g. `questions.urgency.criteria: Field required`. Do not retry |
-| `408`, `429`, `5xx` (including `529 Overloaded`) | Timeout, rate limit, or server problem                                                                                          | —                                                          | Retry with backoff (see below), then report                                                          |
-| Network error or timeout                         | —                                                                                                                               | —                                                          | Retry with backoff, then report                                                                      |
+| Status                                           | Meaning                                                                                                                         | Body                                                       | What we do                                                                                                                 |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `400`                                            | Breaks a request rule (invalid UTF-8, nesting, non-finite number) or exceeds the model's context length (`max_tokens_exceeded`) | `{ "detail": string or object }`                           | Report `detail`. Do not retry                                                                                              |
+| `401`                                            | Missing or invalid API key                                                                                                      | —                                                          | Report "invalid or missing API key" and point to `gutcheck auth validate` (except on `auth validate` itself). Do not retry |
+| `413`                                            | Body over 32 MiB                                                                                                                | —                                                          | Report the size limit. Do not retry. Local checks should normally catch this first                                         |
+| `415`                                            | Unsupported compression                                                                                                         | —                                                          | Should never happen, since we control encoding. Report as an internal error                                                |
+| `422`                                            | Validation failed                                                                                                               | `{ "detail": [{ "loc", "msg", "type", "input", "ctx" }] }` | Report each entry as `<loc>: <msg>`, e.g. `questions.urgency.criteria: Field required`. Do not retry                       |
+| `408`, `429`, `5xx` (including `529 Overloaded`) | Timeout, rate limit, or server problem                                                                                          | —                                                          | Retry with backoff (see below), then report                                                                                |
+| Network error or timeout                         | —                                                                                                                               | —                                                          | Retry with backoff, then report                                                                                            |
+
+Redirects aren't followed. A `3xx` is reported as an unexpected response and isn't retried, so the API key is never sent to another location, and a `2xx` from a login page can't pass for a real answer.
 
 For `422`, the `loc` path starts with `"body"`. We drop that prefix and join the rest with dots so the path matches the field names the caller used.
+
+**Not implemented yet:** the `400`, `413`, `415` and `422` mappings, and the `401` pointer, arrive with the first `ask` command. `gutcheck auth validate` is the only caller so far and sends no request body, so until then these statuses are reported as `unexpected API response (HTTP <status>)`.
 
 With `--verbose`, errors are printed in full (status code and raw body), which helps when the API's error doesn't fit the mapping above.
 
@@ -72,12 +76,12 @@ Only two settings can be configured: `retries` (default 2) and `timeout` (defaul
 
 The backoff between attempts is fixed and matches TypeSafe's official SDKs:
 
-| Behavior                                 | Value                                |
-| ---------------------------------------- | ------------------------------------ |
-| Initial backoff                          | 0.5 s, doubling each time            |
-| Maximum backoff                          | 5 s                                  |
-| Jitter                                   | Up to 25% subtracted from each delay |
-| `Retry-After` / `retry-after-ms` headers | Honored                              |
+| Behavior                                 | Value                                                 |
+| ---------------------------------------- | ----------------------------------------------------- |
+| Initial backoff                          | 0.5 s, doubling each time                             |
+| Maximum backoff                          | 5 s                                                   |
+| Jitter                                   | Up to 25% subtracted from each delay                  |
+| `Retry-After` / `retry-after-ms` headers | Honored. `Retry-After` can be seconds or an HTTP date |
 
 If the next delay would go past the timeout, we stop and report the last error. If the timeout is reached during a request, that request is cancelled.
 

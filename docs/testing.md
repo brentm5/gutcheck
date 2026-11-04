@@ -17,6 +17,7 @@
 | [insta](https://crates.io/crates/insta)                                                                 | Snapshot tests (MCP tool description and schema, error messages) |
 | [jsonschema](https://crates.io/crates/jsonschema)                                                       | Validate our types against the checked-in OpenAPI spec           |
 | [rstest](https://crates.io/crates/rstest)                                                               | Table-driven cases, such as the list of local checks             |
+| [tempfile](https://crates.io/crates/tempfile)                                                           | Temporary config files for CLI tests                             |
 
 ## Test layers
 
@@ -35,7 +36,7 @@ Inside the library modules (`#[cfg(test)]`). Fast, no I/O.
 In `tests/`, using the library and wiremock.
 
 - **Request shape:** method, path, `Authorization` header, `Content-Type`, and body.
-- **Each status code** maps to the right error and message (`400`, `401`, `413`, `422`).
+- **Each status code** maps to the right error and message (`400`, `401`, `413`, `422`). Only `401` is covered until the first `ask` command adds the rest ([`api-client.md`](api-client.md)).
 - **Retries:** `429`, `529`, `5xx` and `408` are retried, up to `retries`; `400`-class errors are not.
 - **`Retry-After`** is honored.
 - **Timeout:** with many retries allowed and a short timeout, the call stops at the timeout. A slow response is cancelled when the timeout is reached.
