@@ -15,11 +15,13 @@
 | MCP server                      | [rmcp](https://crates.io/crates/rmcp) (official MCP SDK) with the stdio transport                                            |
 | Config file                     | [toml](https://crates.io/crates/toml)                                                                                        |
 | Errors                          | [thiserror](https://crates.io/crates/thiserror)                                                                              |
+| HTTP dates                      | [httpdate](https://crates.io/crates/httpdate), for the date form of `Retry-After`                                            |
 | Spec validation (tests only)    | [jsonschema](https://crates.io/crates/jsonschema), as a dev-dependency                                                       |
 | Snapshot tests (tests only)     | [insta](https://crates.io/crates/insta), as a dev-dependency (MCP tool description and schema)                               |
 | Mock API server (tests only)    | [wiremock](https://crates.io/crates/wiremock), as a dev-dependency                                                           |
 | CLI tests (tests only)          | [assert_cmd](https://crates.io/crates/assert_cmd) and [predicates](https://crates.io/crates/predicates), as dev-dependencies |
 | Table-driven tests (tests only) | [rstest](https://crates.io/crates/rstest), as a dev-dependency                                                               |
+| Temporary files (tests only)    | [tempfile](https://crates.io/crates/tempfile), as a dev-dependency (config files for CLI tests)                              |
 
 Crate versions are pinned through `Cargo.lock`, not in this doc. How the test crates are used is in [`testing.md`](testing.md).
 
@@ -44,7 +46,9 @@ spec/       checked-in copy of TypeSafe's openapi.json
 
 ### Async entry point
 
-`rmcp` and `reqwest` both need tokio, so `main` is `#[tokio::main]` for every command, including one-shot `ask` commands. Use the current-thread runtime unless there's a measured reason not to.
+`rmcp` and `reqwest` both need tokio, so `main` runs every command on a tokio runtime, including one-shot `ask` commands. Use the current-thread runtime unless there's a measured reason not to.
+
+`main` builds the runtime by hand rather than using `#[tokio::main]`, and ends it with `shutdown_background()`. `#[tokio::main]` waits for blocking tasks at exit, which includes DNS lookups that can't be cancelled, so a stuck resolver could keep the process alive long after `timeout`.
 
 ### One timeout for the whole operation
 

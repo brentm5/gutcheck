@@ -1,5 +1,12 @@
 //! Core library for `gutcheck`.
 //!
 //! The CLI (`src/main.rs`) and the MCP server are thin front ends over this
-//! crate. API types, local checks, the HTTP client, retries, config loading
-//! and errors will live here. See `docs/language-and-distribution.md`.
+//! crate. See `docs/language-and-distribution.md`.
+
+pub mod client;
+pub mod config;
+pub mod error;
+
+pub use client::{Client, api_key_from_env};
+pub use config::{Overrides, Settings, parse_duration};
+pub use error::Error;

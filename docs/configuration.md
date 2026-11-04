@@ -10,6 +10,8 @@ Settings live in one config file, so scripts, agents and the MCP server all beha
 - **Location:** `$XDG_CONFIG_HOME/gutcheck/config.toml`, which defaults to `~/.config/gutcheck/config.toml`.
 - **Override:** `--config <path>` reads a different file instead. If the file given with `--config` doesn't exist, the command fails with an error.
 - **Optional:** if the file doesn't exist, the defaults below are used.
+- **Default location:** empty or relative `XDG_CONFIG_HOME` and `HOME` values are ignored, so a config file can't come from the current directory. If a parent of the path isn't a directory, the file counts as missing.
+- **Unknown settings are errors,** so a typo like `base-url` can't silently send the API key to the default server.
 
 ```toml
 # ~/.config/gutcheck/config.toml
@@ -35,7 +37,7 @@ timeout = "30s"   # total time for the whole command, including all retries
 `base_url` changes where every request goes. API paths are added to it, so `POST /v1/systemone` goes to `<base_url>/v1/systemone` and `gutcheck auth validate` calls `<base_url>/v1/models`.
 
 - **Uses:** pointing tests at a local mock server ([`testing.md`](testing.md)), or sending requests through a proxy or gateway.
-- **Format:** must be an absolute `http` or `https` URL, or loading the config fails. A trailing slash is ignored. It may include a path prefix (for example `https://gateway.example.com/typesafe`).
+- **Format:** must be an absolute `http` or `https` URL, or loading the config fails. A trailing slash is ignored. It may include a path prefix (for example `https://gateway.example.com/typesafe`). It can't include a username, password, query or fragment.
 - **The API key goes with it.** `TYPESAFE_API_KEY` is sent to whatever `base_url` points at, so only set it to a server you trust.
 
 ## Retries and timeout
