@@ -16,7 +16,8 @@ pub enum Error {
     #[error("{0}")]
     Usage(String),
 
-    /// The API rejected the request. Retrying wouldn't help.
+    /// The API rejected the request or sent a reply we can't use. Retrying
+    /// wouldn't help.
     #[error("{message}")]
     Rejected {
         message: String,

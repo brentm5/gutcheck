@@ -1,9 +1,16 @@
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
-use gutcheck::{Client, Error, Overrides, Settings, api_key_from_env, parse_duration};
+use gutcheck::{
+    Answer, Client, Error, Overrides, Question, Settings, api_key_from_env, parse_duration,
+};
+use tokio::io::AsyncReadExt;
+
+/// How long `--state` waits to see whether stdin also has data.
+const STDIN_CHECK: Duration = Duration::from_millis(100);
 
 /// Ask TypeSafe's Jev model quick, structured questions.
 #[derive(Debug, Parser)]
@@ -37,11 +44,48 @@ struct GlobalArgs {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Ask Jev a question about some input text
+    Ask {
+        #[command(subcommand)]
+        command: AskCommand,
+    },
     /// Manage API authentication
     Auth {
         #[command(subcommand)]
         command: AuthCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum AskCommand {
+    /// Whether a statement is true
+    Noul(NoulArgs),
+}
+
+#[derive(Debug, Args)]
+struct NoulArgs {
+    /// The question or statement to evaluate
+    question: String,
+
+    /// The input text to ask about (reads stdin if not given)
+    #[arg(long, value_name = "TEXT")]
+    state: Option<String>,
+
+    /// What counts as yes
+    #[arg(long = "true", value_name = "TEXT")]
+    if_true: Option<String>,
+
+    /// What counts as no
+    #[arg(long = "false", value_name = "TEXT")]
+    if_false: Option<String>,
+
+    /// The cutoff from 0 to 1: true if the probability is at or above it, otherwise false
+    #[arg(long, value_parser = parse_threshold, default_value_t = 0.5, value_name = "0-1")]
+    threshold: f64,
+
+    /// Print the full answer as JSON instead of true or false
+    #[arg(long, conflicts_with = "threshold")]
+    json: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -114,6 +158,25 @@ async fn run(cli: Cli) -> Result<(), Error> {
     )?;
 
     match cli.command {
+        Command::Ask {
+            command: AskCommand::Noul(args),
+        } => {
+            let client = Client::new(&settings, &api_key_from_env()?)?;
+            // The timeout covers the whole command, so it includes waiting on stdin.
+            let answer = tokio::time::timeout(settings.timeout, async {
+                let state = read_state(args.state).await?;
+                let question = Question::noul(args.question, args.if_true, args.if_false);
+                client.ask_question(state.into(), question).await
+            })
+            .await
+            .unwrap_or(Err(Error::Timeout(settings.timeout)))?;
+            let output = if args.json {
+                answer_json(&answer)?
+            } else {
+                noul_text(&answer, args.threshold)?
+            };
+            print_line(&output)
+        }
         Command::Auth {
             command: AuthCommand::Validate,
         } => {
@@ -123,11 +186,100 @@ async fn run(cli: Cli) -> Result<(), Error> {
     }
 }
 
+/// Picks the state from `--state` or stdin. See `docs/cli-interface.md`.
+async fn read_state(flag: Option<String>) -> Result<String, Error> {
+    let stdin_is_terminal = io::stdin().is_terminal();
+    match flag {
+        Some(_) if !stdin_is_terminal && stdin_has_data().await => Err(Error::Usage(
+            "state given with both --state and stdin; use one".to_owned(),
+        )),
+        Some(state) => Ok(state),
+        None if !stdin_is_terminal => {
+            let mut bytes = Vec::new();
+            tokio::io::stdin()
+                .read_to_end(&mut bytes)
+                .await
+                .map_err(|e| Error::Usage(format!("could not read stdin: {e}")))?;
+            if bytes.is_empty() {
+                return Err(no_state());
+            }
+            String::from_utf8(bytes)
+                .map_err(|_| Error::Usage("stdin is not valid UTF-8".to_owned()))
+        }
+        None => Err(no_state()),
+    }
+}
+
+/// Whether stdin delivers data soon. Scripts, cron jobs and agents often run with
+/// a stdin that isn't a terminal and never sends anything, so that alone doesn't
+/// count as giving state, and waiting for it to close could hang forever.
+async fn stdin_has_data() -> bool {
+    let mut byte = [0u8; 1];
+    let mut stdin = tokio::io::stdin();
+    let read = stdin.read(&mut byte);
+    matches!(tokio::time::timeout(STDIN_CHECK, read).await, Ok(Ok(1)))
+}
+
+fn no_state() -> Error {
+    Error::Usage("no state given: pass --state or pipe it to stdin".to_owned())
+}
+
+/// Parses `--threshold`. `NaN` fails the range check too.
+fn parse_threshold(value: &str) -> Result<f64, String> {
+    match value.parse() {
+        Ok(threshold) if (0.0..=1.0).contains(&threshold) => Ok(threshold),
+        _ => Err("must be a number from 0 to 1".to_owned()),
+    }
+}
+
+/// `true` if the probability reaches `threshold`, otherwise `false`.
+fn noul_text(answer: &Answer, threshold: f64) -> Result<String, Error> {
+    let Answer::Noul { noul, .. } = answer;
+    let probability = noul
+        .as_f64()
+        .ok_or_else(|| Error::Usage(format!("could not read the probability {noul}")))?;
+    Ok((probability >= threshold).to_string())
+}
+
+fn answer_json(answer: &Answer) -> Result<String, Error> {
+    serde_json::to_string(answer)
+        .map_err(|e| Error::Usage(format!("could not encode the output: {e}")))
+}
+
+fn print_line(line: &str) -> Result<(), Error> {
+    writeln!(io::stdout(), "{line}")
+        .map_err(|e| Error::Usage(format!("could not write the output: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
 
+    use rstest::rstest;
+
     use super::*;
+
+    #[rstest]
+    #[case::leans_true(0.6, 0.5, "true")]
+    #[case::leans_false(0.4, 0.5, "false")]
+    #[case::exact_middle_at_the_default(0.5, 0.5, "true")]
+    #[case::on_the_cutoff(0.9, 0.9, "true")]
+    #[case::below_a_high_cutoff(0.89, 0.9, "false")]
+    #[case::above_a_low_cutoff(0.02, 0.01, "true")]
+    #[case::below_a_low_cutoff(0.005, 0.01, "false")]
+    #[case::zero_cutoff_is_always_true(0.0, 0.0, "true")]
+    #[case::top_cutoff_needs_certainty(0.999, 1.0, "false")]
+    fn noul_text_compares_with_the_cutoff(
+        #[case] probability: f64,
+        #[case] threshold: f64,
+        #[case] expected: &str,
+    ) {
+        let answer = Answer::Noul {
+            noul: serde_json::Number::from_f64(probability).unwrap(),
+            extra: serde_json::Map::new(),
+        };
+        assert_eq!(noul_text(&answer, threshold).unwrap(), expected);
+    }
 
     #[test]
     fn exit_does_not_wait_for_blocking_work() {

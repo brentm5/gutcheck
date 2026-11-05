@@ -30,14 +30,16 @@ Every `ask` subcommand takes the same core inputs:
 - **The state:** the input text the question is asked about. See [Passing state](#passing-state).
 - **The answers:** options for `choice`, levels for `score`, optional yes/no clarification for `noul`.
 
-Each subcommand sends a single question, so the request always contains exactly one entry in `questions`.
+Each subcommand sends a single question, so the request always contains exactly one entry in `questions`. Its ID is the question type (`noul`, `choice` or `score`). The ID never appears in successful output, but API errors can name it, as in `questions.noul.criteria: Field required`.
 
-| Command               | Answer flags                                                                 | Output (JSON)                                    |
-| --------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------ |
-| `gutcheck ask choice` | `-o, --option key="description"` (repeatable, 1–255)                         | `choice`, `probabilities`, `confidence`          |
-| `gutcheck ask score`  | `-l, --level "description"` (repeatable and ordered, 1–10)                   | `score`, `legend`, `probabilities`, `confidence` |
-| `gutcheck ask noul`   | `--true "what counts as yes"`, `--false "what counts as no"` (both optional) | `noul`                                           |
-| `gutcheck ask raw`    | (future) a full request body from a file or stdin                            | the full API response                            |
+| Command               | Answer flags                                                                 | Output                | Output with `--json`                             |
+| --------------------- | ---------------------------------------------------------------------------- | --------------------- | ------------------------------------------------ |
+| `gutcheck ask choice` | `-o, --option key="description"` (repeatable, 1–255)                         | The chosen key        | `choice`, `probabilities`, `confidence`          |
+| `gutcheck ask score`  | `-l, --level "description"` (repeatable and ordered, 1–10)                   | The score             | `score`, `legend`, `probabilities`, `confidence` |
+| `gutcheck ask noul`   | `--true "what counts as yes"`, `--false "what counts as no"` (both optional) | `true` or `false`     | `noul`                                           |
+| `gutcheck ask raw`    | (future) a full request body from a file or stdin                            | The full API response | —                                                |
+
+`gutcheck ask noul` also takes `--threshold <0–1>` (default `0.5`), the cutoff at or above which the answer is `true`. See [`output-and-exit-codes.md`](output-and-exit-codes.md#noul-threshold). It can't be combined with `--json`, which reports the probability itself.
 
 Output format and exit codes are covered in [`output-and-exit-codes.md`](output-and-exit-codes.md). Checks before sending, API error handling and retries are covered in [`api-client.md`](api-client.md).
 
@@ -75,6 +77,13 @@ Rules:
 3. If neither is given, the command fails with an error.
 4. If both are given, the command fails with an error rather than silently picking one.
 
+A stdin that isn't a terminal only counts as given if it delivers data. Scripts, cron jobs and agents often run with a stdin that is empty or stays open and silent, and `--state` has to work there:
+
+- With `--state`, the command waits up to 100 ms for data on stdin. Any data triggers rule 4. If stdin closes or nothing arrives in time, the flag is used. Data that arrives later than that is ignored.
+- Without `--state`, the command reads stdin until it closes. If stdin closes without sending anything, that is rule 3. If it never closes, `--timeout` ends the command, because the timeout includes the wait for stdin.
+
+Stdin must be valid UTF-8, and it is sent as is, including any trailing newline.
+
 `--state "$(cat file.txt)"` works, but stdin is usually the better choice for files:
 
 - It needs no quoting. Without quotes around `$(...)`, the shell splits the text into separate arguments.
@@ -92,19 +101,22 @@ echo "Payment page throws 500 after checkout" \
       -o billing="Payments, invoices, refunds" \
       -o platform="Infra, outages, server errors" \
       -o other="Anything else"
-# => {"type":"choice","choice":"platform","probabilities":{...},"confidence":0.91}
+# => platform
 
 # Score: rate against an ordered rubric
 gutcheck ask score "How frustrated is the customer?" \
   --state "This is the third time I've asked. Fix it." \
   -l "Calm" -l "Annoyed" -l "Angry"
-# => {"type":"score","score":1.8,"legend":{...},"probabilities":{...},"confidence":0.74}
+# => 1.8
 
-# Noul: yes/no probability, compared in the script
-urgent=$(gutcheck ask noul "The message is urgent" < ticket.txt | jq '.noul > 0.7')
-if [ "$urgent" = "true" ]; then
+# Noul: true or false, here stricter about true than the default threshold of 0.5
+if [ "$(gutcheck ask noul "The message is urgent" --threshold 0.9 < ticket.txt)" = "true" ]; then
   page-oncall
 fi
+
+# --json: the full answer, including the probability
+gutcheck ask noul "The message is urgent" --json < ticket.txt
+# => {"type":"noul","noul":0.91}
 
 # Check the API key, then start the MCP server
 gutcheck auth validate

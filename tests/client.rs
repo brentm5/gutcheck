@@ -4,8 +4,10 @@
 use std::time::{Duration, Instant};
 
 use gutcheck::client::Backoff;
-use gutcheck::{Client, Error, Settings};
-use wiremock::matchers::{header, method, path};
+use gutcheck::{Client, Error, Question, Settings};
+use rstest::rstest;
+use serde_json::json;
+use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const FAST: Backoff = Backoff {
@@ -255,4 +257,189 @@ async fn invalid_key_characters_are_reported_without_the_key() {
         error.to_string(),
         "TYPESAFE_API_KEY contains invalid characters"
     );
+}
+
+fn noul() -> Question {
+    Question::noul("Is it urgent?".to_owned(), Some("Yes".to_owned()), None)
+}
+
+async fn mock_systemone(server: &MockServer, status: u16, body: &str) {
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(status).set_body_string(body))
+        .mount(server)
+        .await;
+}
+
+const NOUL_SUCCESS: &str = include_str!("fixtures/noul_success.json");
+
+#[tokio::test]
+async fn ask_sends_the_documented_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .and(header("authorization", "Bearer test-key"))
+        .and(header("content-type", "application/json"))
+        .and(body_json(json!({
+            "model": "jev-latest",
+            "state": "the input",
+            "questions": {
+                "noul": {
+                    "type": "noul",
+                    "instructions": "Is it urgent?",
+                    "criteria": {"true": "Yes"}
+                }
+            }
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_string(NOUL_SUCCESS))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let answer = client(&server.uri(), 0, LONG)
+        .ask_question(json!("the input"), noul())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        serde_json::to_string(&answer).unwrap(),
+        r#"{"type":"noul","noul":0.91}"#
+    );
+}
+
+#[tokio::test]
+async fn ask_keeps_the_answer_as_the_api_wrote_it() {
+    let server = MockServer::start().await;
+    mock_systemone(
+        &server,
+        200,
+        r#"{"answers":{"noul":{"type":"noul","noul":1,"confidence":0.5}}}"#,
+    )
+    .await;
+
+    let answer = client(&server.uri(), 0, LONG)
+        .ask_question(json!("text"), noul())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        serde_json::to_string(&answer).unwrap(),
+        r#"{"type":"noul","noul":1,"confidence":0.5}"#
+    );
+}
+
+#[tokio::test]
+async fn ask_runs_local_checks_before_sending() {
+    let server = MockServer::start().await;
+    Mock::given(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let error = client(&server.uri(), 0, LONG)
+        .ask_question(json!(""), noul())
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, Error::Usage(_)), "{error}");
+    assert_eq!(error.to_string(), "state: must not be empty");
+}
+
+#[tokio::test]
+async fn ask_rejects_an_oversized_body_before_sending() {
+    let server = MockServer::start().await;
+    Mock::given(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let error = client(&server.uri(), 0, LONG)
+        .ask_question(json!("x".repeat(32 * 1024 * 1024)), noul())
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "request body is over the API's 32 MiB limit"
+    );
+}
+
+#[rstest]
+#[case::bad_request(400, include_str!("fixtures/bad_request_400.json"), "max_tokens_exceeded")]
+#[case::unauthorized(
+    401,
+    "",
+    "invalid or missing API key; check it with `gutcheck auth validate`"
+)]
+#[case::too_large(413, "", "request body is over the API's 32 MiB limit")]
+#[case::encoding(415, "", "internal error: the API rejected the request encoding")]
+#[case::validation(
+    422,
+    include_str!("fixtures/validation_error_422.json"),
+    "questions.noul.criteria: Field required"
+)]
+#[tokio::test]
+async fn ask_maps_rejections_without_retrying(
+    #[case] status: u16,
+    #[case] body: &str,
+    #[case] message: &str,
+) {
+    let server = MockServer::start().await;
+    Mock::given(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(status).set_body_string(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = client(&server.uri(), 5, LONG)
+        .ask_question(json!("text"), noul())
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, Error::Rejected { .. }), "{error}");
+    assert_eq!(error.to_string(), message);
+    assert_eq!(error.http_details().unwrap().status, status);
+}
+
+#[tokio::test]
+async fn ask_retries_temporary_failures() {
+    let server = MockServer::start().await;
+    Mock::given(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(529))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    mock_systemone(&server, 200, NOUL_SUCCESS).await;
+
+    client(&server.uri(), 1, LONG)
+        .ask_question(json!("text"), noul())
+        .await
+        .unwrap();
+}
+
+#[rstest]
+#[case::not_json("<html>login</html>")]
+#[case::no_answers("{}")]
+#[case::other_id(r#"{"answers":{"other":{"type":"noul","noul":0.5}}}"#)]
+#[case::wrong_type(r#"{"answers":{"noul":{"type":"box","box":{}}}}"#)]
+#[case::missing_value(r#"{"answers":{"noul":{"type":"noul"}}}"#)]
+#[tokio::test]
+async fn ask_reports_an_unusable_success_response(#[case] body: &str) {
+    let server = MockServer::start().await;
+    mock_systemone(&server, 200, body).await;
+
+    let error = client(&server.uri(), 3, LONG)
+        .ask_question(json!("text"), noul())
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, Error::Rejected { .. }), "{error}");
+    assert_eq!(
+        error.to_string(),
+        "unexpected API response: it has no usable answer"
+    );
+    assert_eq!(error.http_details().unwrap().body, body);
 }

@@ -54,6 +54,6 @@ The skill should stay short. It covers:
 1. **When to use Jev:** quick judgments where every possible answer can be listed up front. When not to use it: open-ended generation, or anything that needs a free-text answer.
 2. **Commands:** `gutcheck ask choice`, `gutcheck ask score` and `gutcheck ask noul`, with their flags and one example each.
 3. **Passing state:** `--state` or stdin, and the quoting caveat for `--state "$(cat file)"`.
-4. **Reading results:** output is JSON (parse it with `jq`), exit code `0` means success and `1` means an error.
+4. **Reading results:** output is the plain answer (`true` or `false` for `noul`, using `--threshold` as the cutoff, the option key for `choice`, the number for `score`). `--json` gives the full answer with its probabilities. Exit code `0` means success and `1` means an error, whatever the answer is.
 5. **Writing good questions:** keep each question about one thing, add an "other" option to `choice`, and order `score` levels from low to high.
 6. **Setup:** `TYPESAFE_API_KEY` must be set; `gutcheck auth validate` checks it.

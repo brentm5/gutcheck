@@ -33,3 +33,12 @@ run = "cargo build --release"
 [tasks.test]
 description = "Run all tests"
 run = "cargo test"
+
+[tasks."spec:update"]
+description = "Download the latest OpenAPI spec to spec/openapi.json"
+# Pretty-printed so that changes to the spec are readable in review.
+run = """
+curl -fsSL https://api.typesafe.ai/openapi.json -o spec/openapi.json.tmp
+jq . spec/openapi.json.tmp > spec/openapi.json
+rm spec/openapi.json.tmp
+"""

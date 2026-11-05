@@ -1,9 +1,12 @@
 use std::io::Write;
+use std::process::{Command as StdCommand, Stdio};
 
 use assert_cmd::Command;
 use predicates::prelude::*;
+use rstest::rstest;
+use serde_json::json;
 use tempfile::NamedTempFile;
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn gutcheck() -> Command {
@@ -221,4 +224,287 @@ fn non_unicode_key_is_reported_as_invalid() {
         .code(1)
         .stdout("")
         .stderr("error: TYPESAFE_API_KEY contains invalid characters\n");
+}
+
+const NOUL_SUCCESS: &str = include_str!("fixtures/noul_success.json");
+const NOUL_OUTPUT: &str = "true\n";
+
+fn ask_noul(config: &NamedTempFile) -> Command {
+    let mut command = gutcheck();
+    command
+        .args(["ask", "noul", "Is it urgent?", "--config"])
+        .arg(config.path())
+        .env("TYPESAFE_API_KEY", "test-key");
+    command
+}
+
+/// Answers only a request whose body contains `expected`.
+async fn mock_noul(server: &MockServer, expected: serde_json::Value) {
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .and(body_partial_json(expected))
+        .respond_with(ResponseTemplate::new(200).set_body_string(NOUL_SUCCESS))
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+/// Fails the test if any request reaches the API.
+async fn expect_no_requests(server: &MockServer) {
+    Mock::given(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn noul_prints_the_answer_for_state_from_the_flag() {
+    let server = MockServer::start().await;
+    mock_noul(
+        &server,
+        json!({
+            "model": "jev-latest",
+            "state": "the input",
+            "questions": {"noul": {"type": "noul", "instructions": "Is it urgent?"}}
+        }),
+    )
+    .await;
+
+    ask_noul(&config_for(&server))
+        .args(["--state", "the input"])
+        .assert()
+        .success()
+        .stdout(NOUL_OUTPUT)
+        .stderr("");
+}
+
+#[tokio::test]
+async fn noul_reads_state_from_stdin() {
+    let server = MockServer::start().await;
+    mock_noul(&server, json!({"state": "piped input\n"})).await;
+
+    ask_noul(&config_for(&server))
+        .write_stdin("piped input\n")
+        .assert()
+        .success()
+        .stdout(NOUL_OUTPUT);
+}
+
+#[tokio::test]
+async fn noul_sends_criteria_and_model() {
+    let server = MockServer::start().await;
+    mock_noul(
+        &server,
+        json!({
+            "model": "jev-1",
+            "questions": {"noul": {"criteria": {"true": "Yes", "false": "No"}}}
+        }),
+    )
+    .await;
+
+    ask_noul(&config_for(&server))
+        .args(["--state", "text", "--true", "Yes", "--false", "No"])
+        .args(["--model", "jev-1"])
+        .assert()
+        .success();
+}
+
+#[tokio::test]
+async fn noul_rejects_state_from_both_places() {
+    let server = MockServer::start().await;
+    expect_no_requests(&server).await;
+
+    ask_noul(&config_for(&server))
+        .args(["--state", "text"])
+        .write_stdin("piped input")
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr("error: state given with both --state and stdin; use one\n");
+}
+
+#[tokio::test]
+async fn noul_rejects_missing_state() {
+    let server = MockServer::start().await;
+    expect_no_requests(&server).await;
+
+    ask_noul(&config_for(&server))
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr("error: no state given: pass --state or pipe it to stdin\n");
+}
+
+#[tokio::test]
+async fn noul_rejects_an_empty_state_flag() {
+    let server = MockServer::start().await;
+    expect_no_requests(&server).await;
+
+    ask_noul(&config_for(&server))
+        .args(["--state", ""])
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr("error: state: must not be empty\n");
+}
+
+#[tokio::test]
+async fn noul_rejects_stdin_that_is_not_utf8() {
+    let server = MockServer::start().await;
+    expect_no_requests(&server).await;
+
+    ask_noul(&config_for(&server))
+        .write_stdin(vec![0xff, 0xfe])
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr("error: stdin is not valid UTF-8\n");
+}
+
+/// Runs `gutcheck ask noul` with a stdin pipe that stays open and silent, as a
+/// parent process might leave it.
+fn noul_with_silent_stdin(config: &NamedTempFile, args: &[&str]) -> std::process::Output {
+    let mut child = StdCommand::new(assert_cmd::cargo::cargo_bin("gutcheck"))
+        .args(["ask", "noul", "Is it urgent?", "--config"])
+        .arg(config.path())
+        .args(args)
+        .env("TYPESAFE_API_KEY", "test-key")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdin = child.stdin.take();
+    let output = child.wait_with_output().unwrap();
+    drop(stdin);
+    output
+}
+
+#[tokio::test]
+async fn state_flag_works_when_stdin_stays_open_and_silent() {
+    let server = MockServer::start().await;
+    mock_noul(&server, json!({"state": "text"})).await;
+
+    let output = noul_with_silent_stdin(&config_for(&server), &["--state", "text"]);
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), NOUL_OUTPUT);
+}
+
+#[tokio::test]
+async fn timeout_covers_waiting_on_stdin() {
+    let server = MockServer::start().await;
+    expect_no_requests(&server).await;
+
+    let output = noul_with_silent_stdin(&config_for(&server), &["--timeout", "100ms"]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.stdout, b"");
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "error: timed out after 100ms\n"
+    );
+}
+
+#[tokio::test]
+async fn noul_reports_api_errors_with_verbose_details() {
+    let server = MockServer::start().await;
+    let body = include_str!("fixtures/validation_error_422.json");
+    Mock::given(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(422).set_body_string(body))
+        .mount(&server)
+        .await;
+
+    ask_noul(&config_for(&server))
+        .args(["--state", "text", "--verbose"])
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(format!(
+            "error: questions.noul.criteria: Field required\nHTTP status: 422\nresponse body: {body}\n"
+        ));
+}
+
+#[test]
+fn noul_needs_the_api_key_before_reading_state() {
+    let config = config_with("");
+
+    ask_noul(&config)
+        .env_remove("TYPESAFE_API_KEY")
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr("error: TYPESAFE_API_KEY is not set\n");
+}
+
+async fn mock_any_noul(server: &MockServer) {
+    Mock::given(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(NOUL_SUCCESS))
+        .mount(server)
+        .await;
+}
+
+// The mock answers with a probability of 0.91.
+#[rstest]
+#[case::default_threshold(&[], "true\n")]
+#[case::below_the_answer(&["--threshold", "0.9"], "true\n")]
+#[case::equal_to_the_answer(&["--threshold", "0.91"], "true\n")]
+#[case::above_the_answer(&["--threshold", "0.95"], "false\n")]
+#[case::json(&["--json"], "{\"type\":\"noul\",\"noul\":0.91}\n")]
+#[tokio::test]
+async fn noul_output_follows_the_flags(#[case] flags: &[&str], #[case] expected: &str) {
+    let server = MockServer::start().await;
+    mock_any_noul(&server).await;
+
+    ask_noul(&config_for(&server))
+        .args(["--state", "text"])
+        .args(flags)
+        .assert()
+        .success()
+        .stdout(expected.to_owned())
+        .stderr("");
+}
+
+#[tokio::test]
+async fn noul_false_answer_still_succeeds() {
+    let server = MockServer::start().await;
+    Mock::given(path("/v1/systemone"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"answers":{"noul":{"type":"noul","noul":0}}}"#),
+        )
+        .mount(&server)
+        .await;
+
+    ask_noul(&config_for(&server))
+        .args(["--state", "text"])
+        .assert()
+        .code(0)
+        .stdout("false\n");
+}
+
+#[rstest]
+#[case::above_range("1.5")]
+#[case::below_range("-0.1")]
+#[case::not_a_number("NaN")]
+#[case::text("high")]
+fn invalid_thresholds_exit_1(#[case] threshold: &str) {
+    ask_noul(&config_with(""))
+        .args(["--state", "text"])
+        .arg(format!("--threshold={threshold}"))
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(predicate::str::contains("must be a number from 0 to 1"));
+}
+
+#[test]
+fn threshold_and_json_cannot_be_combined() {
+    ask_noul(&config_with(""))
+        .args(["--state", "text", "--threshold", "0.7", "--json"])
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(predicate::str::contains("cannot be used with"));
 }
