@@ -5,12 +5,16 @@ use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
 use gutcheck::{
-    Answer, Client, Error, Overrides, Question, Settings, api_key_from_env, parse_duration,
+    Answer, Client, Error, MAX_BODY_BYTES, Overrides, Question, Settings, api_key_from_env,
+    check_body_size, parse_duration,
 };
 use tokio::io::AsyncReadExt;
 
 /// How long `--state` waits to see whether stdin also has data.
 const STDIN_CHECK: Duration = Duration::from_millis(100);
+
+/// How often stdin is looked at during that wait.
+const STDIN_CHECK_INTERVAL: Duration = Duration::from_millis(5);
 
 /// Ask TypeSafe's Jev model quick, structured questions.
 #[derive(Debug, Parser)]
@@ -163,17 +167,18 @@ async fn run(cli: Cli) -> Result<(), Error> {
         } => {
             let client = Client::new(&settings, &api_key_from_env()?)?;
             // The timeout covers the whole command, so it includes waiting on stdin.
-            let answer = tokio::time::timeout(settings.timeout, async {
-                let state = read_state(args.state).await?;
-                let question = Question::noul(args.question, args.if_true, args.if_false);
-                client.ask_question(state.into(), question).await
-            })
-            .await
-            .unwrap_or(Err(Error::Timeout(settings.timeout)))?;
+            let deadline = client.deadline();
+            let state = tokio::time::timeout_at(deadline, read_state(args.state))
+                .await
+                .unwrap_or(Err(Error::Timeout(settings.timeout)))?;
+            let question = Question::noul(args.question, args.if_true, args.if_false);
+            let answer = client
+                .ask_question(state.into(), question, deadline)
+                .await?;
             let output = if args.json {
                 answer_json(&answer)?
             } else {
-                noul_text(&answer, args.threshold)?
+                noul_text(&answer, args.threshold)
             };
             print_line(&output)
         }
@@ -195,14 +200,18 @@ async fn read_state(flag: Option<String>) -> Result<String, Error> {
         )),
         Some(state) => Ok(state),
         None if !stdin_is_terminal => {
+            // One byte past the limit is enough to know it's too large.
+            let limit = MAX_BODY_BYTES as u64 + 1;
             let mut bytes = Vec::new();
             tokio::io::stdin()
+                .take(limit)
                 .read_to_end(&mut bytes)
                 .await
                 .map_err(|e| Error::Usage(format!("could not read stdin: {e}")))?;
             if bytes.is_empty() {
                 return Err(no_state());
             }
+            check_body_size(bytes.len())?;
             String::from_utf8(bytes)
                 .map_err(|_| Error::Usage("stdin is not valid UTF-8".to_owned()))
         }
@@ -213,11 +222,21 @@ async fn read_state(flag: Option<String>) -> Result<String, Error> {
 /// Whether stdin delivers data soon. Scripts, cron jobs and agents often run with
 /// a stdin that isn't a terminal and never sends anything, so that alone doesn't
 /// count as giving state, and waiting for it to close could hang forever.
+///
+/// This asks how many bytes are waiting instead of reading, because stdin may
+/// belong to the script that started this command. Polling for readiness wouldn't
+/// do: `/dev/null`, a closed pipe and a file at its end are all "ready" with no data.
 async fn stdin_has_data() -> bool {
-    let mut byte = [0u8; 1];
-    let mut stdin = tokio::io::stdin();
-    let read = stdin.read(&mut byte);
-    matches!(tokio::time::timeout(STDIN_CHECK, read).await, Ok(Ok(1)))
+    let start = tokio::time::Instant::now();
+    loop {
+        match rustix::io::ioctl_fionread(io::stdin()) {
+            Ok(0) if start.elapsed() < STDIN_CHECK => {
+                tokio::time::sleep(STDIN_CHECK_INTERVAL).await;
+            }
+            Ok(0) | Err(_) => return false,
+            Ok(_) => return true,
+        }
+    }
 }
 
 fn no_state() -> Error {
@@ -233,22 +252,18 @@ fn parse_threshold(value: &str) -> Result<f64, String> {
 }
 
 /// `true` if the probability reaches `threshold`, otherwise `false`.
-fn noul_text(answer: &Answer, threshold: f64) -> Result<String, Error> {
-    let Answer::Noul { noul, .. } = answer;
-    let probability = noul
-        .as_f64()
-        .ok_or_else(|| Error::Usage(format!("could not read the probability {noul}")))?;
-    Ok((probability >= threshold).to_string())
+fn noul_text(answer: &Answer, threshold: f64) -> String {
+    (answer.probability() >= threshold).to_string()
 }
 
 fn answer_json(answer: &Answer) -> Result<String, Error> {
     serde_json::to_string(answer)
-        .map_err(|e| Error::Usage(format!("could not encode the output: {e}")))
+        .map_err(|e| Error::Output(format!("could not encode the output: {e}")))
 }
 
 fn print_line(line: &str) -> Result<(), Error> {
     writeln!(io::stdout(), "{line}")
-        .map_err(|e| Error::Usage(format!("could not write the output: {e}")))
+        .map_err(|e| Error::Output(format!("could not write the output: {e}")))
 }
 
 #[cfg(test)]
@@ -278,7 +293,7 @@ mod tests {
             noul: serde_json::Number::from_f64(probability).unwrap(),
             extra: serde_json::Map::new(),
         };
-        assert_eq!(noul_text(&answer, threshold).unwrap(), expected);
+        assert_eq!(noul_text(&answer, threshold), expected);
     }
 
     #[test]

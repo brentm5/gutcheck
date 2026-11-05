@@ -10,9 +10,11 @@ readme = "README.md"
 publish = false
 
 [dependencies]
+bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive"] }
 httpdate = "1.0.3"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2"] }
+rustix = "1.1.6"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
 thiserror = "2.0.21"

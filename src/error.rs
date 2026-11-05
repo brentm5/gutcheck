@@ -34,6 +34,10 @@ pub enum Error {
     /// The whole operation went past the configured `timeout`.
     #[error("timed out after {0:?}")]
     Timeout(Duration),
+
+    /// The answer arrived but couldn't be printed.
+    #[error("{0}")]
+    Output(String),
 }
 
 impl Error {
@@ -42,7 +46,7 @@ impl Error {
         match self {
             Error::Rejected { details, .. } => Some(details),
             Error::Temporary { details, .. } => details.as_ref(),
-            Error::Usage(_) | Error::Timeout(_) => None,
+            Error::Usage(_) | Error::Timeout(_) | Error::Output(_) => None,
         }
     }
 }

@@ -38,7 +38,9 @@ run = "cargo test"
 description = "Download the latest OpenAPI spec to spec/openapi.json"
 # Pretty-printed so that changes to the spec are readable in review.
 run = """
-curl -fsSL https://api.typesafe.ai/openapi.json -o spec/openapi.json.tmp
-jq . spec/openapi.json.tmp > spec/openapi.json
-rm spec/openapi.json.tmp
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+curl -fsSL https://api.typesafe.ai/openapi.json -o "$tmp/download.json"
+jq -e . "$tmp/download.json" > "$tmp/openapi.json"
+mv "$tmp/openapi.json" spec/openapi.json
 """

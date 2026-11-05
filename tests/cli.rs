@@ -1,5 +1,7 @@
-use std::io::Write;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::process::{Command as StdCommand, Stdio};
+use std::time::Duration;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -337,16 +339,16 @@ async fn noul_rejects_missing_state() {
 }
 
 #[tokio::test]
-async fn noul_rejects_an_empty_state_flag() {
+async fn noul_leaves_an_empty_state_flag_to_the_api() {
     let server = MockServer::start().await;
-    expect_no_requests(&server).await;
+    mock_noul(&server, json!({"state": ""})).await;
 
     ask_noul(&config_for(&server))
         .args(["--state", ""])
+        .write_stdin("")
         .assert()
-        .code(1)
-        .stdout("")
-        .stderr("error: state: must not be empty\n");
+        .success()
+        .stdout(NOUL_OUTPUT);
 }
 
 #[tokio::test]
@@ -390,6 +392,151 @@ async fn state_flag_works_when_stdin_stays_open_and_silent() {
 
     assert!(output.status.success());
     assert_eq!(String::from_utf8(output.stdout).unwrap(), NOUL_OUTPUT);
+}
+
+fn noul_with_stdin(config: &NamedTempFile, args: &[&str], stdin: impl Into<Stdio>) -> StdCommand {
+    let mut command = StdCommand::new(assert_cmd::cargo::cargo_bin("gutcheck"));
+    command
+        .args(["ask", "noul", "Is it urgent?", "--config"])
+        .arg(config.path())
+        .args(args)
+        .env("TYPESAFE_API_KEY", "test-key")
+        .stdin(stdin)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
+}
+
+#[tokio::test]
+async fn state_flag_works_when_stdin_has_nothing_to_read() {
+    let server = MockServer::start().await;
+    Mock::given(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(NOUL_SUCCESS))
+        .expect(4)
+        .mount(&server)
+        .await;
+    let config = config_for(&server);
+
+    let (closed_pipe, writer) = std::io::pipe().unwrap();
+    drop(writer);
+    let empty_file = NamedTempFile::new().unwrap();
+    let mut file_at_its_end = NamedTempFile::new().unwrap();
+    file_at_its_end.write_all(b"used up").unwrap();
+    let mut used_up = File::open(file_at_its_end.path()).unwrap();
+    used_up.read_to_end(&mut Vec::new()).unwrap();
+
+    let stdins: [Stdio; 4] = [
+        Stdio::null(),
+        closed_pipe.into(),
+        File::open(empty_file.path()).unwrap().into(),
+        used_up.into(),
+    ];
+    for stdin in stdins {
+        let output = noul_with_stdin(&config, &["--state", "text"], stdin)
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), NOUL_OUTPUT);
+    }
+}
+
+/// The caller may still want what's on stdin, as in a `while read` loop, so an
+/// error mustn't use any of it up.
+#[tokio::test]
+async fn state_check_leaves_a_file_on_stdin_unread() {
+    let server = MockServer::start().await;
+    expect_no_requests(&server).await;
+    let mut input = NamedTempFile::new().unwrap();
+    input.write_all(b"line one\n").unwrap();
+    let mut reader = File::open(input.path()).unwrap();
+
+    let output = noul_with_stdin(
+        &config_for(&server),
+        &["--state", "text"],
+        reader.try_clone().unwrap(),
+    )
+    .output()
+    .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "error: state given with both --state and stdin; use one\n"
+    );
+    let mut left = String::new();
+    reader.read_to_string(&mut left).unwrap();
+    assert_eq!(left, "line one\n");
+}
+
+#[tokio::test]
+async fn state_check_leaves_late_stdin_data_for_the_caller() {
+    let server = MockServer::start().await;
+    Mock::given(path("/v1/systemone"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(NOUL_SUCCESS)
+                .set_delay(Duration::from_millis(300)),
+        )
+        .mount(&server)
+        .await;
+    let config = config_for(&server);
+    let (mut reader, mut writer) = std::io::pipe().unwrap();
+
+    let child = noul_with_stdin(&config, &["--state", "text"], reader.try_clone().unwrap())
+        .spawn()
+        .unwrap();
+    // A request means the check is over, so the byte written next counts as late.
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while server.received_requests().await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the request should arrive");
+    writer.write_all(b"x").unwrap();
+    drop(writer);
+    let output = child.wait_with_output().unwrap();
+
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), NOUL_OUTPUT);
+    let mut left = Vec::new();
+    reader.read_to_end(&mut left).unwrap();
+    assert_eq!(left, b"x");
+}
+
+#[tokio::test]
+async fn noul_stops_reading_stdin_past_the_size_limit() {
+    let server = MockServer::start().await;
+    expect_no_requests(&server).await;
+    let mut endless = StdCommand::new("cat")
+        .arg("/dev/zero")
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let output = noul_with_stdin(&config_for(&server), &[], endless.stdout.take().unwrap())
+        .output()
+        .unwrap();
+    endless.kill().unwrap();
+    endless.wait().unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "error: request body is over the API's 32 MiB limit\n"
+    );
+}
+
+#[tokio::test]
+async fn timeout_too_long_for_the_clock_still_works() {
+    let server = MockServer::start().await;
+    mock_noul(&server, json!({"state": "text"})).await;
+
+    ask_noul(&config_for(&server))
+        .args(["--state", "text", "--timeout", "18446744073709551615s"])
+        .write_stdin("")
+        .assert()
+        .success()
+        .stdout(NOUL_OUTPUT);
 }
 
 #[tokio::test]

@@ -632,12 +632,14 @@ name = "gutcheck"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
+ "bytes",
  "clap",
  "httpdate",
  "jsonschema",
  "predicates",
  "reqwest",
  "rstest",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

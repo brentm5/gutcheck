@@ -25,7 +25,7 @@ These run before any request is sent. Limits come from TypeSafe's [OpenAPI spec]
 | Check        | Rule                                                        |
 | ------------ | ----------------------------------------------------------- |
 | `model`      | Present (filled in from config if the caller didn't set it) |
-| `state`      | Present and not empty. A string, object or array            |
+| `state`      | Present. A string, object or array, which may be empty      |
 | `questions`  | An object with at least one entry                           |
 | Question IDs | Non-empty strings                                           |
 | Body size    | At most 32 MiB once encoded                                 |
@@ -66,7 +66,7 @@ Redirects aren't followed. A `3xx` is reported as an unexpected response and isn
 
 For `422`, the `loc` path starts with `"body"`. We drop that prefix and join the rest with dots so the path matches the field names the caller used.
 
-If a `400` or `422` body doesn't have the documented shape, the error is reported as `unexpected API response (HTTP <status>)`. So is a `2xx` response without a usable answer, using the message `unexpected API response: it has no usable answer`. Neither is retried, and `--verbose` shows the body.
+If a `400` or `422` body doesn't have the documented shape, or its `detail` or every `msg` is empty, the error is reported as `unexpected API response (HTTP <status>)`. So is a `2xx` response without a usable answer, using the message `unexpected API response: it has no usable answer`. Neither is retried, and `--verbose` shows the body.
 
 **Not implemented yet:** `gutcheck ask noul` is the only command that sends questions so far. The `choice` and `score` checks and the pass-through for unknown question types arrive with `ask choice`, `ask score` and `ask_jev`.
 

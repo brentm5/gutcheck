@@ -7,16 +7,15 @@ use crate::api::SystemOneRequest;
 use crate::error::Error;
 
 /// The API's limit on the encoded request body: 32 MiB.
-const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
+
+pub(crate) const BODY_TOO_LARGE: &str = "request body is over the API's 32 MiB limit";
 
 pub(crate) fn check_request(request: &SystemOneRequest) -> Result<(), Error> {
     if request.model.is_empty() {
         return Err(failed("model: must not be empty"));
     }
     match &request.state {
-        Value::String(text) if text.is_empty() => Err(failed("state: must not be empty")),
-        Value::Array(items) if items.is_empty() => Err(failed("state: must not be empty")),
-        Value::Object(fields) if fields.is_empty() => Err(failed("state: must not be empty")),
         Value::String(_) | Value::Array(_) | Value::Object(_) => Ok(()),
         _ => Err(failed("state: must be a string, object or array")),
     }?;
@@ -29,9 +28,9 @@ pub(crate) fn check_request(request: &SystemOneRequest) -> Result<(), Error> {
     Ok(())
 }
 
-pub(crate) fn check_body_size(bytes: usize) -> Result<(), Error> {
+pub fn check_body_size(bytes: usize) -> Result<(), Error> {
     if bytes > MAX_BODY_BYTES {
-        return Err(failed("request body is over the API's 32 MiB limit"));
+        return Err(failed(BODY_TOO_LARGE));
     }
     Ok(())
 }
@@ -66,15 +65,15 @@ mod tests {
     #[case::string(json!("text"))]
     #[case::object(json!({"subject": "text"}))]
     #[case::array(json!(["text"]))]
+    #[case::empty_string(json!(""))]
+    #[case::empty_object(json!({}))]
+    #[case::empty_array(json!([]))]
     fn accepts_valid_requests(#[case] state: Value) {
         check_request(&request("jev-latest", state, &["id"])).unwrap();
     }
 
     #[rstest]
     #[case::empty_model("", json!("text"), &["id"], "model: must not be empty")]
-    #[case::empty_string("m", json!(""), &["id"], "state: must not be empty")]
-    #[case::empty_object("m", json!({}), &["id"], "state: must not be empty")]
-    #[case::empty_array("m", json!([]), &["id"], "state: must not be empty")]
     #[case::number("m", json!(1), &["id"], "state: must be a string, object or array")]
     #[case::null("m", Value::Null, &["id"], "state: must be a string, object or array")]
     #[case::no_questions("m", json!("text"), &[], "questions: needs at least 1 question")]

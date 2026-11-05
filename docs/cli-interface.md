@@ -79,10 +79,12 @@ Rules:
 
 A stdin that isn't a terminal only counts as given if it delivers data. Scripts, cron jobs and agents often run with a stdin that is empty or stays open and silent, and `--state` has to work there:
 
-- With `--state`, the command waits up to 100 ms for data on stdin. Any data triggers rule 4. If stdin closes or nothing arrives in time, the flag is used. Data that arrives later than that is ignored.
+- With `--state`, the command watches stdin for up to 100 ms without reading from it, so nothing is used up for whatever reads stdin next. Any data waiting there triggers rule 4. If nothing arrives in time, the flag is used, and data that arrives later is ignored and left unread.
 - Without `--state`, the command reads stdin until it closes. If stdin closes without sending anything, that is rule 3. If it never closes, `--timeout` ends the command, because the timeout includes the wait for stdin.
 
-Stdin must be valid UTF-8, and it is sent as is, including any trailing newline.
+A file on stdin counts as data until it has been read to the end. So a `while read` loop over a file has to give the command its own stdin: `gutcheck ask noul "..." --state "$line" </dev/null`.
+
+Stdin must be valid UTF-8, and it is sent as is, including any trailing newline. Reading stops as soon as it goes over the API's 32 MiB body limit, and the command fails with the size error.
 
 `--state "$(cat file.txt)"` works, but stdin is usually the better choice for files:
 

@@ -38,6 +38,11 @@ async fn respond(server: &MockServer, status: u16, expected_requests: u64) {
 
 const LONG: Duration = Duration::from_secs(30);
 
+/// A deadline that a test shouldn't reach.
+fn soon() -> tokio::time::Instant {
+    tokio::time::Instant::now() + LONG
+}
+
 #[tokio::test]
 async fn sends_the_key_as_a_bearer_token() {
     let server = MockServer::start().await;
@@ -297,7 +302,7 @@ async fn ask_sends_the_documented_request() {
         .await;
 
     let answer = client(&server.uri(), 0, LONG)
-        .ask_question(json!("the input"), noul())
+        .ask_question(json!("the input"), noul(), soon())
         .await
         .unwrap();
 
@@ -318,7 +323,7 @@ async fn ask_keeps_the_answer_as_the_api_wrote_it() {
     .await;
 
     let answer = client(&server.uri(), 0, LONG)
-        .ask_question(json!("text"), noul())
+        .ask_question(json!("text"), noul(), soon())
         .await
         .unwrap();
 
@@ -326,6 +331,45 @@ async fn ask_keeps_the_answer_as_the_api_wrote_it() {
         serde_json::to_string(&answer).unwrap(),
         r#"{"type":"noul","noul":1,"confidence":0.5}"#
     );
+}
+
+/// The deadline can be closer than `timeout`, when time went on reading stdin.
+#[tokio::test]
+async fn ask_stops_early_when_the_next_wait_would_pass_the_deadline() {
+    let server = MockServer::start().await;
+    Mock::given(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "10"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let error = client(&server.uri(), 100, LONG)
+        .ask_question(json!("text"), noul(), deadline)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, Error::Temporary { .. }), "{error}");
+    assert_eq!(error.http_details().unwrap().status, 429);
+}
+
+#[tokio::test]
+async fn ask_cancels_a_slow_response_at_the_deadline() {
+    let server = MockServer::start().await;
+    Mock::given(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(200).set_delay(LONG))
+        .mount(&server)
+        .await;
+
+    let start = Instant::now();
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(100);
+    let error = client(&server.uri(), 0, LONG)
+        .ask_question(json!("text"), noul(), deadline)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, Error::Timeout(_)), "{error}");
+    assert!(start.elapsed() < Duration::from_secs(5));
 }
 
 #[tokio::test]
@@ -338,12 +382,15 @@ async fn ask_runs_local_checks_before_sending() {
         .await;
 
     let error = client(&server.uri(), 0, LONG)
-        .ask_question(json!(""), noul())
+        .ask_question(json!(1), noul(), soon())
         .await
         .unwrap_err();
 
     assert!(matches!(error, Error::Usage(_)), "{error}");
-    assert_eq!(error.to_string(), "state: must not be empty");
+    assert_eq!(
+        error.to_string(),
+        "state: must be a string, object or array"
+    );
 }
 
 #[tokio::test]
@@ -356,7 +403,7 @@ async fn ask_rejects_an_oversized_body_before_sending() {
         .await;
 
     let error = client(&server.uri(), 0, LONG)
-        .ask_question(json!("x".repeat(32 * 1024 * 1024)), noul())
+        .ask_question(json!("x".repeat(32 * 1024 * 1024)), noul(), soon())
         .await
         .unwrap_err();
 
@@ -394,7 +441,7 @@ async fn ask_maps_rejections_without_retrying(
         .await;
 
     let error = client(&server.uri(), 5, LONG)
-        .ask_question(json!("text"), noul())
+        .ask_question(json!("text"), noul(), soon())
         .await
         .unwrap_err();
 
@@ -415,7 +462,7 @@ async fn ask_retries_temporary_failures() {
     mock_systemone(&server, 200, NOUL_SUCCESS).await;
 
     client(&server.uri(), 1, LONG)
-        .ask_question(json!("text"), noul())
+        .ask_question(json!("text"), noul(), soon())
         .await
         .unwrap();
 }
@@ -432,7 +479,7 @@ async fn ask_reports_an_unusable_success_response(#[case] body: &str) {
     mock_systemone(&server, 200, body).await;
 
     let error = client(&server.uri(), 3, LONG)
-        .ask_question(json!("text"), noul())
+        .ask_question(json!("text"), noul(), soon())
         .await
         .unwrap_err();
 

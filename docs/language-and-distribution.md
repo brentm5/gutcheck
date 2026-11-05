@@ -16,6 +16,8 @@
 | Config file                     | [toml](https://crates.io/crates/toml)                                                                                        |
 | Errors                          | [thiserror](https://crates.io/crates/thiserror)                                                                              |
 | HTTP dates                      | [httpdate](https://crates.io/crates/httpdate), for the date form of `Retry-After`                                            |
+| Request bodies                  | [bytes](https://crates.io/crates/bytes), so a retry doesn't copy the body                                                    |
+| Checking stdin                  | [rustix](https://crates.io/crates/rustix), to see how much data is waiting without reading it (Unix only)                    |
 | Spec validation (tests only)    | [jsonschema](https://crates.io/crates/jsonschema), as a dev-dependency                                                       |
 | Snapshot tests (tests only)     | [insta](https://crates.io/crates/insta), as a dev-dependency (MCP tool description and schema)                               |
 | Mock API server (tests only)    | [wiremock](https://crates.io/crates/wiremock), as a dev-dependency                                                           |
@@ -52,7 +54,7 @@ spec/       checked-in copy of TypeSafe's openapi.json
 
 ### One timeout for the whole operation
 
-Wrap the full request-plus-retries future in `tokio::time::timeout` using the configured `timeout`. When it fires, the in-flight request is dropped (cancelled) and the command returns a timeout error. The retry loop itself only enforces `retries` and checks that the next backoff fits in the remaining time. See [`configuration.md`](configuration.md).
+The configured `timeout` becomes a single deadline, set when the operation starts and passed down, so time spent before the request (such as waiting on stdin) counts too. The full request-plus-retries future runs under `tokio::time::timeout_at` with that deadline. When it fires, the in-flight request is dropped (cancelled) and the command returns a timeout error. The retry loop itself only enforces `retries` and checks that the next backoff fits in the time left before the deadline. See [`configuration.md`](configuration.md).
 
 ### Retries and backoff
 
@@ -80,7 +82,7 @@ Why not generate the types: the spec is OpenAPI 3.1, which the main Rust generat
 
 ### Errors and exit codes
 
-One error enum (with `thiserror`) whose variants match the categories in [`api-client.md`](api-client.md): usage/validation, API rejection, temporary failure, timeout. For now every variant exits with code 1 ([`output-and-exit-codes.md`](output-and-exit-codes.md)), but keeping the categories makes distinct exit codes easy to add later. `main` handles the exit code and the stderr message in one place. Library code never calls `process::exit`.
+One error enum (with `thiserror`) whose variants match the categories in [`api-client.md`](api-client.md): usage/validation, API rejection, temporary failure, timeout, plus one for an answer that couldn't be printed. For now every variant exits with code 1 ([`output-and-exit-codes.md`](output-and-exit-codes.md)), but keeping the categories makes distinct exit codes easy to add later. `main` handles the exit code and the stderr message in one place. Library code never calls `process::exit`.
 
 ### Shared core, thin front ends
 

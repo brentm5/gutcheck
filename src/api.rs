@@ -60,7 +60,8 @@ pub struct SystemOneResponse {
     pub answers: BTreeMap<String, Answer>,
 }
 
-/// One answer. It serializes back to what the API sent, apart from key order:
+/// One answer. It serializes back to the same fields and values the API sent,
+/// though key order and number formatting can differ (`0.910` becomes `0.91`).
 /// `Number` keeps `1` from becoming `1.0`, and `extra` keeps any fields the API
 /// adds later.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -71,6 +72,15 @@ pub enum Answer {
         #[serde(flatten)]
         extra: Map<String, Value>,
     },
+}
+
+impl Answer {
+    /// A `noul` answer's probability. A `Number` always converts, because
+    /// `arbitrary_precision` is off and JSON can't hold a non-finite float.
+    pub fn probability(&self) -> f64 {
+        let Answer::Noul { noul, .. } = self;
+        noul.as_f64().unwrap_or(f64::NAN)
+    }
 }
 
 /// The body of a `400` response.

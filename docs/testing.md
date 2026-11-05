@@ -49,7 +49,7 @@ In `tests/`, using assert_cmd to run the real `gutcheck` binary against wiremock
 
 - Each `ask` subcommand: success prints the plain answer to stdout and exits `0`, and `--json` prints one line of JSON instead.
 - Errors: nothing on stdout, a message on stderr, exit `1` ([`output-and-exit-codes.md`](output-and-exit-codes.md)).
-- State input: `--state`, stdin, and the error cases (both or neither given).
+- State input: `--state`, stdin, and the error cases (both or neither given). With `--state`, stdin's data is left unread, and these real kinds of stdin are covered: `/dev/null`, a closed pipe, a pipe that stays silent or gets late data, and a file (unread, empty or at its end).
 - `gutcheck auth validate` against a mock `GET /v1/models`.
 - `gutcheck skill` prints the embedded skill.
 

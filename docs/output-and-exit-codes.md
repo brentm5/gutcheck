@@ -19,9 +19,9 @@ Output goes to stdout as a single line. By default that line is the answer's mai
 
 | Command                     | Default output                                       | With `--json`                                                      |
 | --------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------ |
-| `gutcheck ask noul`         | `true` or `false`, using `--threshold` (default 0.5) | The answer object for the question, exactly as the API returned it |
-| `gutcheck ask choice`       | The chosen option key                                | The answer object for the question, exactly as the API returned it |
-| `gutcheck ask score`        | The score, which can fall between levels             | The answer object for the question, exactly as the API returned it |
+| `gutcheck ask noul`         | `true` or `false`, using `--threshold` (default 0.5) | The answer object for the question                                 |
+| `gutcheck ask choice`       | The chosen option key                                | The answer object for the question                                 |
+| `gutcheck ask score`        | The score, which can fall between levels             | The answer object for the question                                 |
 | `gutcheck ask raw` (future) | The full API response                                | —                                                                  |
 | `gutcheck auth validate`    | Nothing. The exit code is the answer                 | —                                                                  |
 | `gutcheck skill`            | The skill Markdown                                   | —                                                                  |
@@ -48,7 +48,7 @@ The plain output hides how close the call was: at the default, `0.51` and `0.99`
 
 ### JSON output
 
-With `--json`, the `ask` subcommands print just the answer, not the full response with `model`, `usage` and the question ID. Examples:
+With `--json`, the `ask` subcommands print just the answer, not the full response with `model`, `usage` and the question ID. Its fields and values match the API's, including any fields added later, but key order and number formatting may differ: `0.910` can print as `0.91`. Examples:
 
 ```json
 {"type":"choice","choice":"platform","probabilities":{"billing":0.04,"platform":0.93,"other":0.03},"confidence":0.91}
