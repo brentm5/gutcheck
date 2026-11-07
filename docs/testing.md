@@ -49,7 +49,11 @@ In `tests/`, using assert_cmd to run the real `gutcheck` binary against wiremock
 
 - Each `ask` subcommand: success prints the plain answer to stdout and exits `0`, and `--json` prints one line of JSON instead.
 - Errors: nothing on stdout, a message on stderr, exit `1` ([`output-and-exit-codes.md`](output-and-exit-codes.md)).
-- State input: `--state`, stdin, and the error cases (both or neither given). With `--state`, stdin's data is left unread, and these real kinds of stdin are covered: `/dev/null`, a closed pipe, a pipe that stays silent or gets late data, and a file (unread, empty or at its end).
+- State input: `--state`, stdin, and the missing-state error. `--state` wins when both sources are given and leaves stdin unread without waiting to check it. Cover `/dev/null`, a closed pipe, a pipe with data or one that stays silent or gets late data, a file (unread, empty or at its end), and a real shell `while read` loop.
+- Choice options: bare keys and keys with descriptions, including a mixture of the two, produce the intended request and print the selected key. Split descriptions at the first `=` only, preserve later `=` characters, and reject empty or duplicate keys, including duplicates across the two forms.
+- Noul output modes: plain output is the probability rounded to at most three decimal places; `--boolean` uses the unrounded value, a default cutoff of `0.5` and a strict `>` comparison, including equality at custom cutoffs. Cover thresholds `0` and `1`, invalid values, `--threshold` without `--boolean`, the `--boolean`/`--json` conflict, and JSON retaining precision.
+- Score levels: flag order defines the zero-based rubric; a fractional answer uses the common plain-number display rule without snapping to a level or rescaling, and `--json` retains the answer's legend, probabilities and confidence.
+- Parser contracts: repeated single-value flags are rejected, help/version succeed, errors exit `1`, and the binary's `__usage_spec__` output matches the checked-in generated KDL.
 - `gutcheck auth validate` against a mock `GET /v1/models`.
 - `gutcheck skill` prints the embedded skill.
 
@@ -72,5 +76,7 @@ Sample API responses live in `tests/fixtures/` as JSON files, one per case (for 
 ## Running tests
 
 `mise run test` runs `cargo test`, which includes unit tests, integration tests and doc tests.
+
+Run `mise install` first, then use `mise run test` locally and in CI. The parser conformance test in `src/cli.rs` invokes the pinned Usage CLI to compare native parsing with the generated spec. Running `cargo test` directly requires that Usage version on `PATH`; the test fails if the executable is missing.
 
 We use plain `cargo test` rather than [cargo-nextest](https://nexte.st/). The suite is small and fast, and nextest doesn't run doc tests. Switching later only means changing the `test` task (plus `cargo test --doc` for doc tests), for example if CI needs retries for flaky tests or clearer output.

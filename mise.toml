@@ -1,6 +1,7 @@
 [tools]
 rumdl = "0.3.2"
 rust = { version = "1.99.1", components = "clippy,rustfmt" }
+usage = "7.3.0"
 
 [tasks."lint:md"]
 description = "Lint Markdown files"
@@ -14,13 +15,17 @@ run = "rumdl fmt ."
 description = "Lint Rust code with clippy (warnings are errors)"
 run = "cargo clippy --all-targets -- -D warnings"
 
+[tasks."lint:usage"]
+description = "Validate the Usage CLI specification"
+run = "usage lint --warnings-as-errors gutcheck.usage.kdl"
+
 [tasks."fmt:rust"]
 description = "Format Rust code"
 run = "cargo fmt"
 
 [tasks.lint]
 description = "Run all linters"
-depends = ["lint:md", "lint:rust"]
+depends = ["lint:md", "lint:rust", "lint:usage"]
 
 [tasks.fmt]
 description = "Run all formatters"
@@ -43,4 +48,14 @@ trap 'rm -rf "$tmp"' EXIT
 curl -fsSL https://api.typesafe.ai/openapi.json -o "$tmp/download.json"
 jq -e . "$tmp/download.json" > "$tmp/openapi.json"
 mv "$tmp/openapi.json" spec/openapi.json
+"""
+
+[tasks."spec:usage"]
+description = "Regenerate the CLI spec from the executable's Usage declarations"
+run = """
+set -eu
+usage_spec_tmp=$(mktemp)
+trap 'rm -f "$usage_spec_tmp"' EXIT
+cargo run --locked --quiet -- __usage_spec__ > "$usage_spec_tmp"
+mv "$usage_spec_tmp" gutcheck.usage.kdl
 """

@@ -2,6 +2,10 @@
 
 Specs and decisions for `gutcheck`. Each doc should end up with a clear **Decision** section that can be implemented against.
 
+Domain terminology is defined in [`GLOSSARY.md`](../GLOSSARY.md).
+
+The machine-readable implemented CLI contract is [`gutcheck.usage.kdl`](../gutcheck.usage.kdl), generated from the Rust command declarations. Its role is described in [`cli-interface.md`](cli-interface.md#usage-specification); planned commands remain in the design docs.
+
 ## Docs
 
 | Doc                                                            | Covers                                                                                            | Status    |

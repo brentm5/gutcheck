@@ -1,102 +1,15 @@
 use std::io::{self, IsTerminal, Write};
-use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::Duration;
 
-use clap::{Args, Parser, Subcommand};
+mod cli;
+mod output;
+
+use cli::{AskCommand, AuthCommand, Cli, Command};
 use gutcheck::{
     Answer, Client, Error, MAX_BODY_BYTES, Overrides, Question, Settings, api_key_from_env,
-    check_body_size, parse_duration,
+    check_body_size,
 };
 use tokio::io::AsyncReadExt;
-
-/// How long `--state` waits to see whether stdin also has data.
-const STDIN_CHECK: Duration = Duration::from_millis(100);
-
-/// How often stdin is looked at during that wait.
-const STDIN_CHECK_INTERVAL: Duration = Duration::from_millis(5);
-
-/// Ask TypeSafe's Jev model quick, structured questions.
-#[derive(Debug, Parser)]
-#[command(name = "gutcheck", version, about, arg_required_else_help = true)]
-struct Cli {
-    #[command(flatten)]
-    global: GlobalArgs,
-
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Debug, Args)]
-struct GlobalArgs {
-    /// Path to a config file to use instead of the default
-    #[arg(long, global = true, value_name = "PATH")]
-    config: Option<PathBuf>,
-
-    /// Model to use (default jev-latest)
-    #[arg(long, global = true)]
-    model: Option<String>,
-
-    /// Maximum time for the whole command, including retries (e.g. 10s)
-    #[arg(long, global = true, value_parser = parse_duration, value_name = "DURATION")]
-    timeout: Option<Duration>,
-
-    /// On errors, print the HTTP status and raw API response body
-    #[arg(long, global = true)]
-    verbose: bool,
-}
-
-#[derive(Debug, Subcommand)]
-enum Command {
-    /// Ask Jev a question about some input text
-    Ask {
-        #[command(subcommand)]
-        command: AskCommand,
-    },
-    /// Manage API authentication
-    Auth {
-        #[command(subcommand)]
-        command: AuthCommand,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum AskCommand {
-    /// Whether a statement is true
-    Noul(NoulArgs),
-}
-
-#[derive(Debug, Args)]
-struct NoulArgs {
-    /// The question or statement to evaluate
-    question: String,
-
-    /// The input text to ask about (reads stdin if not given)
-    #[arg(long, value_name = "TEXT")]
-    state: Option<String>,
-
-    /// What counts as yes
-    #[arg(long = "true", value_name = "TEXT")]
-    if_true: Option<String>,
-
-    /// What counts as no
-    #[arg(long = "false", value_name = "TEXT")]
-    if_false: Option<String>,
-
-    /// The cutoff from 0 to 1: true if the probability is at or above it, otherwise false
-    #[arg(long, value_parser = parse_threshold, default_value_t = 0.5, value_name = "0-1")]
-    threshold: f64,
-
-    /// Print the full answer as JSON instead of true or false
-    #[arg(long, conflicts_with = "threshold")]
-    json: bool,
-}
-
-#[derive(Debug, Subcommand)]
-enum AuthCommand {
-    /// Check that the API key works
-    Validate,
-}
 
 fn main() -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -125,15 +38,24 @@ fn run_without_waiting_for_blocking_work<T>(
 }
 
 async fn cli_main() -> ExitCode {
-    let cli = match Cli::try_parse() {
-        Ok(cli) => cli,
-        Err(error) => {
-            let _ = error.print();
-            // Clap exits 2 on usage errors, but every error here exits 1.
-            return if error.use_stderr() {
-                ExitCode::FAILURE
+    let argv: Vec<_> = std::env::args_os().skip(1).collect();
+    let cli = match Cli::embedded_outcome(&argv) {
+        usage_rs::embedded::Outcome::Parsed(cli) => cli,
+        usage_rs::embedded::Outcome::Exit(exit) => {
+            let result = if exit.stderr {
+                io::stderr().write_all(exit.text.as_bytes())
             } else {
+                io::stdout().write_all(exit.text.as_bytes())
+            };
+            if let Err(error) = result {
+                eprintln!("error: could not write the output: {error}");
+                return ExitCode::FAILURE;
+            }
+            // The parser's default usage-error status is 2; gutcheck uses 1 for every error.
+            return if exit.code == 0 {
                 ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
             };
         }
     };
@@ -157,14 +79,14 @@ async fn run(cli: Cli) -> Result<(), Error> {
         cli.global.config.as_deref(),
         Overrides {
             model: cli.global.model,
-            timeout: cli.global.timeout,
+            timeout: cli.global.timeout.map(|timeout| timeout.0),
         },
     )?;
 
     match cli.command {
-        Command::Ask {
+        Command::Ask(cli::AskArgs {
             command: AskCommand::Noul(args),
-        } => {
+        }) => {
             let client = Client::new(&settings, &api_key_from_env()?)?;
             // The timeout covers the whole command, so it includes waiting on stdin.
             let deadline = client.deadline();
@@ -177,14 +99,19 @@ async fn run(cli: Cli) -> Result<(), Error> {
                 .await?;
             let output = if args.json {
                 answer_json(&answer)?
+            } else if args.boolean {
+                let threshold = args
+                    .threshold
+                    .expect("--boolean supplies a threshold through default_if");
+                noul_text(&answer, threshold.0)
             } else {
-                noul_text(&answer, args.threshold)
+                output::number_text(answer.probability())
             };
             print_line(&output)
         }
-        Command::Auth {
-            command: AuthCommand::Validate,
-        } => {
+        Command::Auth(cli::AuthArgs {
+            command: AuthCommand::Validate(_),
+        }) => {
             let client = Client::new(&settings, &api_key_from_env()?)?;
             client.validate_auth().await
         }
@@ -195,9 +122,6 @@ async fn run(cli: Cli) -> Result<(), Error> {
 async fn read_state(flag: Option<String>) -> Result<String, Error> {
     let stdin_is_terminal = io::stdin().is_terminal();
     match flag {
-        Some(_) if !stdin_is_terminal && stdin_has_data().await => Err(Error::Usage(
-            "state given with both --state and stdin; use one".to_owned(),
-        )),
         Some(state) => Ok(state),
         None if !stdin_is_terminal => {
             // One byte past the limit is enough to know it's too large.
@@ -219,41 +143,13 @@ async fn read_state(flag: Option<String>) -> Result<String, Error> {
     }
 }
 
-/// Whether stdin delivers data soon. Scripts, cron jobs and agents often run with
-/// a stdin that isn't a terminal and never sends anything, so that alone doesn't
-/// count as giving state, and waiting for it to close could hang forever.
-///
-/// This asks how many bytes are waiting instead of reading, because stdin may
-/// belong to the script that started this command. Polling for readiness wouldn't
-/// do: `/dev/null`, a closed pipe and a file at its end are all "ready" with no data.
-async fn stdin_has_data() -> bool {
-    let start = tokio::time::Instant::now();
-    loop {
-        match rustix::io::ioctl_fionread(io::stdin()) {
-            Ok(0) if start.elapsed() < STDIN_CHECK => {
-                tokio::time::sleep(STDIN_CHECK_INTERVAL).await;
-            }
-            Ok(0) | Err(_) => return false,
-            Ok(_) => return true,
-        }
-    }
-}
-
 fn no_state() -> Error {
     Error::Usage("no state given: pass --state or pipe it to stdin".to_owned())
 }
 
-/// Parses `--threshold`. `NaN` fails the range check too.
-fn parse_threshold(value: &str) -> Result<f64, String> {
-    match value.parse() {
-        Ok(threshold) if (0.0..=1.0).contains(&threshold) => Ok(threshold),
-        _ => Err("must be a number from 0 to 1".to_owned()),
-    }
-}
-
-/// `true` if the probability reaches `threshold`, otherwise `false`.
+/// `true` if the unrounded probability exceeds `threshold`, otherwise `false`.
 fn noul_text(answer: &Answer, threshold: f64) -> String {
-    (answer.probability() >= threshold).to_string()
+    (answer.probability() > threshold).to_string()
 }
 
 fn answer_json(answer: &Answer) -> Result<String, Error> {
@@ -268,6 +164,7 @@ fn print_line(line: &str) -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
     use std::time::Instant;
 
     use rstest::rstest;
@@ -277,12 +174,13 @@ mod tests {
     #[rstest]
     #[case::leans_true(0.6, 0.5, "true")]
     #[case::leans_false(0.4, 0.5, "false")]
-    #[case::exact_middle_at_the_default(0.5, 0.5, "true")]
-    #[case::on_the_cutoff(0.9, 0.9, "true")]
+    #[case::exact_middle_at_the_default(0.5, 0.5, "false")]
+    #[case::on_the_cutoff(0.9, 0.9, "false")]
     #[case::below_a_high_cutoff(0.89, 0.9, "false")]
     #[case::above_a_low_cutoff(0.02, 0.01, "true")]
     #[case::below_a_low_cutoff(0.005, 0.01, "false")]
-    #[case::zero_cutoff_is_always_true(0.0, 0.0, "true")]
+    #[case::zero_at_zero_cutoff(0.0, 0.0, "false")]
+    #[case::one_at_one_cutoff(1.0, 1.0, "false")]
     #[case::top_cutoff_needs_certainty(0.999, 1.0, "false")]
     fn noul_text_compares_with_the_cutoff(
         #[case] probability: f64,

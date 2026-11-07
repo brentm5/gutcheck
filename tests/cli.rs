@@ -229,7 +229,7 @@ fn non_unicode_key_is_reported_as_invalid() {
 }
 
 const NOUL_SUCCESS: &str = include_str!("fixtures/noul_success.json");
-const NOUL_OUTPUT: &str = "true\n";
+const NOUL_OUTPUT: &str = "0.91\n";
 
 fn ask_noul(config: &NamedTempFile) -> Command {
     let mut command = gutcheck();
@@ -313,17 +313,17 @@ async fn noul_sends_criteria_and_model() {
 }
 
 #[tokio::test]
-async fn noul_rejects_state_from_both_places() {
+async fn noul_state_flag_takes_precedence_over_stdin() {
     let server = MockServer::start().await;
-    expect_no_requests(&server).await;
+    mock_noul(&server, json!({"state": "text"})).await;
 
     ask_noul(&config_for(&server))
         .args(["--state", "text"])
         .write_stdin("piped input")
         .assert()
-        .code(1)
-        .stdout("")
-        .stderr("error: state given with both --state and stdin; use one\n");
+        .success()
+        .stdout(NOUL_OUTPUT)
+        .stderr("");
 }
 
 #[tokio::test]
@@ -440,12 +440,12 @@ async fn state_flag_works_when_stdin_has_nothing_to_read() {
     }
 }
 
-/// The caller may still want what's on stdin, as in a `while read` loop, so an
-/// error mustn't use any of it up.
+/// The caller may still want what's on stdin, as in a `while read` loop, so a
+/// command mustn't use any of it up.
 #[tokio::test]
-async fn state_check_leaves_a_file_on_stdin_unread() {
+async fn state_flag_leaves_a_file_on_stdin_unread() {
     let server = MockServer::start().await;
-    expect_no_requests(&server).await;
+    mock_noul(&server, json!({"state": "text"})).await;
     let mut input = NamedTempFile::new().unwrap();
     input.write_all(b"line one\n").unwrap();
     let mut reader = File::open(input.path()).unwrap();
@@ -458,18 +458,16 @@ async fn state_check_leaves_a_file_on_stdin_unread() {
     .output()
     .unwrap();
 
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
-        "error: state given with both --state and stdin; use one\n"
-    );
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), NOUL_OUTPUT);
+    assert!(output.stderr.is_empty());
     let mut left = String::new();
     reader.read_to_string(&mut left).unwrap();
     assert_eq!(left, "line one\n");
 }
 
 #[tokio::test]
-async fn state_check_leaves_late_stdin_data_for_the_caller() {
+async fn state_flag_leaves_late_stdin_data_for_the_caller() {
     let server = MockServer::start().await;
     Mock::given(path("/v1/systemone"))
         .respond_with(
@@ -485,7 +483,7 @@ async fn state_check_leaves_late_stdin_data_for_the_caller() {
     let child = noul_with_stdin(&config, &["--state", "text"], reader.try_clone().unwrap())
         .spawn()
         .unwrap();
-    // A request means the check is over, so the byte written next counts as late.
+    // A request means input selection is over; later stdin data must remain unread.
     tokio::time::timeout(Duration::from_secs(20), async {
         while server.received_requests().await.unwrap().is_empty() {
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -594,10 +592,13 @@ async fn mock_any_noul(server: &MockServer) {
 
 // The mock answers with a probability of 0.91.
 #[rstest]
-#[case::default_threshold(&[], "true\n")]
-#[case::below_the_answer(&["--threshold", "0.9"], "true\n")]
-#[case::equal_to_the_answer(&["--threshold", "0.91"], "true\n")]
-#[case::above_the_answer(&["--threshold", "0.95"], "false\n")]
+#[case::probability(&[], "0.91\n")]
+#[case::default_boolean(&["--boolean"], "true\n")]
+#[case::below_the_answer(&["--boolean", "--threshold", "0.9"], "true\n")]
+#[case::equal_to_the_answer(&["--boolean", "--threshold", "0.91"], "false\n")]
+#[case::above_the_answer(&["--boolean", "--threshold", "0.95"], "false\n")]
+#[case::zero_cutoff(&["--boolean", "--threshold", "0"], "true\n")]
+#[case::one_cutoff(&["--boolean", "--threshold", "1"], "false\n")]
 #[case::json(&["--json"], "{\"type\":\"noul\",\"noul\":0.91}\n")]
 #[tokio::test]
 async fn noul_output_follows_the_flags(#[case] flags: &[&str], #[case] expected: &str) {
@@ -625,7 +626,7 @@ async fn noul_false_answer_still_succeeds() {
         .await;
 
     ask_noul(&config_for(&server))
-        .args(["--state", "text"])
+        .args(["--state", "text", "--boolean"])
         .assert()
         .code(0)
         .stdout("false\n");
@@ -638,7 +639,8 @@ async fn noul_false_answer_still_succeeds() {
 #[case::text("high")]
 fn invalid_thresholds_exit_1(#[case] threshold: &str) {
     ask_noul(&config_with(""))
-        .args(["--state", "text"])
+        .env_remove("TYPESAFE_API_KEY")
+        .args(["--state", "text", "--boolean"])
         .arg(format!("--threshold={threshold}"))
         .assert()
         .code(1)
@@ -647,11 +649,109 @@ fn invalid_thresholds_exit_1(#[case] threshold: &str) {
 }
 
 #[test]
-fn threshold_and_json_cannot_be_combined() {
+fn boolean_and_json_cannot_be_combined() {
     ask_noul(&config_with(""))
-        .args(["--state", "text", "--threshold", "0.7", "--json"])
+        .env_remove("TYPESAFE_API_KEY")
+        .args(["--state", "text", "--boolean", "--json"])
         .assert()
         .code(1)
         .stdout("")
         .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn threshold_requires_boolean() {
+    ask_noul(&config_with(""))
+        .env_remove("TYPESAFE_API_KEY")
+        .args(["--state", "text", "--threshold", "0.7"])
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(predicate::str::contains("--boolean"));
+}
+
+#[rstest]
+#[case::state(&["--state", "first", "--state", "second"])]
+#[case::boolean(&["--boolean", "--boolean"])]
+#[case::threshold(&["--boolean", "--threshold", "0.5", "--threshold", "0.7"])]
+#[case::global(&["--verbose", "--verbose"])]
+fn repeated_single_value_flags_are_rejected(#[case] flags: &[&str]) {
+    ask_noul(&config_with(""))
+        .env_remove("TYPESAFE_API_KEY")
+        .args(flags)
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(predicate::str::contains("multiple times"));
+}
+
+#[rstest]
+#[case::round_down("0.912345678", &[], "0.912\n")]
+#[case::round_up("0.9126", &[], "0.913\n")]
+#[case::integer("1.0", &[], "1\n")]
+#[case::trim_zeros("0.0100", &[], "0.01\n")]
+#[case::tiny("1e-8", &[], "0\n")]
+#[case::near_cutoff("0.5004", &[], "0.5\n")]
+#[case::compare_before_rounding("0.5004", &["--boolean"], "true\n")]
+#[case::json_preserves_precision("0.5004", &["--json"], "{\"type\":\"noul\",\"noul\":0.5004}\n")]
+#[case::exact_middle("0.5", &["--boolean"], "false\n")]
+#[tokio::test]
+async fn noul_rounding_only_affects_plain_numeric_output(
+    #[case] number: &str,
+    #[case] flags: &[&str],
+    #[case] expected: &str,
+) {
+    let server = MockServer::start().await;
+    let body = format!(r#"{{"answers":{{"noul":{{"type":"noul","noul":{number}}}}}}}"#);
+    Mock::given(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    ask_noul(&config_for(&server))
+        .args(["--state", "text"])
+        .args(flags)
+        .assert()
+        .success()
+        .stdout(expected.to_owned());
+}
+
+#[tokio::test]
+async fn state_flag_works_in_a_while_read_loop() {
+    let server = MockServer::start().await;
+    mock_noul(&server, json!({"state": "first"})).await;
+    mock_noul(&server, json!({"state": "second"})).await;
+    let config = config_for(&server);
+    let mut input = NamedTempFile::new().unwrap();
+    input.write_all(b"first\nsecond\n").unwrap();
+
+    let output = StdCommand::new("bash")
+        .args([
+            "-c",
+            r#"while IFS= read -r line; do
+                "$1" ask noul 'Is it urgent?' --state "$line" --config "$2" || exit 1
+            done"#,
+            "gutcheck-loop",
+        ])
+        .arg(assert_cmd::cargo::cargo_bin("gutcheck"))
+        .arg(config.path())
+        .env("TYPESAFE_API_KEY", "test-key")
+        .stdin(File::open(input.path()).unwrap())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"0.91\n0.91\n");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn usage_spec_matches_the_executable() {
+    gutcheck()
+        .arg("__usage_spec__")
+        .env_remove("TYPESAFE_API_KEY")
+        .assert()
+        .success()
+        .stdout(include_str!("../gutcheck.usage.kdl"));
 }

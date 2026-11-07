@@ -8,7 +8,7 @@
 
 | Need                            | Crate                                                                                                                        |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| CLI framework                   | [clap](https://crates.io/crates/clap) (derive API): nested subcommands and global flags                                      |
+| CLI framework                   | [usage-rs](https://usage.jdx.dev/rust/quickstart) 7.3.0: typed parsing, help and generated Usage metadata                    |
 | Async runtime                   | [tokio](https://crates.io/crates/tokio)                                                                                      |
 | HTTP client                     | [reqwest](https://crates.io/crates/reqwest) with rustls (no OpenSSL dependency)                                              |
 | JSON                            | [serde](https://crates.io/crates/serde) and [serde_json](https://crates.io/crates/serde_json)                                |
@@ -17,7 +17,6 @@
 | Errors                          | [thiserror](https://crates.io/crates/thiserror)                                                                              |
 | HTTP dates                      | [httpdate](https://crates.io/crates/httpdate), for the date form of `Retry-After`                                            |
 | Request bodies                  | [bytes](https://crates.io/crates/bytes), so a retry doesn't copy the body                                                    |
-| Checking stdin                  | [rustix](https://crates.io/crates/rustix), to see how much data is waiting without reading it (Unix only)                    |
 | Spec validation (tests only)    | [jsonschema](https://crates.io/crates/jsonschema), as a dev-dependency                                                       |
 | Snapshot tests (tests only)     | [insta](https://crates.io/crates/insta), as a dev-dependency (MCP tool description and schema)                               |
 | Mock API server (tests only)    | [wiremock](https://crates.io/crates/wiremock), as a dev-dependency                                                           |
@@ -34,7 +33,9 @@ One Cargo package with a library and a thin binary. Cargo picks up both files au
 ```text
 src/
   lib.rs    the core: API types, local checks, client, retries, config, errors
-  main.rs   thin: parse clap args, call the library, map errors to exit codes
+  cli.rs    usage-rs command declarations and CLI value types
+  main.rs   thin: parse args, call the library, map errors to exit codes
+  output.rs plain numeric CLI formatting
 tests/      integration tests against the library (including spec validation)
 spec/       checked-in copy of TypeSafe's openapi.json
 ```
@@ -89,16 +90,26 @@ One error enum (with `thiserror`) whose variants match the categories in [`api-c
 The CLI commands and the MCP server are thin layers over the same core:
 
 ```text
-cli (clap) ─┐
+cli (usage-rs) ─┐
             ├─► core: build request → local checks → send with retries → typed response
 mcp (rmcp) ─┘
 ```
 
 Command handlers only parse input and format output. Validation, HTTP, retries and error mapping live in the core.
 
+### CLI parsing and specification
+
+The Rust declarations in `src/cli.rs` are the executable CLI's source of truth. `usage-rs` generates help and the `__usage_spec__` endpoint from the same metadata. Version, license, repository and the root description come from Cargo's package environment variables. The checked-in `gutcheck.usage.kdl` is generated with `mise run spec:usage`, and a test compares it with the binary's exported spec. It lists implemented commands only; future commands stay in the design docs until implemented.
+
+Use `embedded_outcome` so `main` controls the process's exit status: help, version and spec output succeed, and usage errors map to the project's error code `1`. Set `unknown_flags = "error"` and `args_override_self = false` on the relevant command declarations to retain strict parsing. CLI-specific value types implement `FromStr`; the duration wrapper reuses the core duration parser. The threshold also declares portable validation so the generated KDL reports the same constraint without exposing conversion-expression errors.
+
+### Plain numeric formatting
+
+The shared CLI formatter in `src/output.rs` uses the single `PLAIN_DECIMAL_PLACES` constant, currently `3`, for both probabilities and future score output. It emits ordinary decimals and trims fractional zeros. Threshold comparisons use the original value, and JSON output bypasses display rounding.
+
 ### Configuration loading
 
-Load the TOML file into a settings struct with defaults (`#[serde(default)]`), then apply `--model` and `--timeout` from clap on top. The result is a single resolved settings value passed to the core. See [`configuration.md`](configuration.md).
+Load the TOML file into a settings struct with defaults (`#[serde(default)]`), then apply `--model` and `--timeout` from the parsed CLI on top. The result is a single resolved settings value passed to the core. See [`configuration.md`](configuration.md).
 
 ### Embedded skill
 
