@@ -117,6 +117,18 @@ impl Client {
         now.checked_add(self.timeout).unwrap_or(now + FAR_FUTURE)
     }
 
+    /// Runs `operation`, giving up at `deadline` with [`Error::Timeout`]. Use it for
+    /// any wait that counts toward the timeout, such as reading the state first.
+    pub async fn within<T>(
+        &self,
+        deadline: Instant,
+        operation: impl Future<Output = Result<T, Error>>,
+    ) -> Result<T, Error> {
+        tokio::time::timeout_at(deadline, operation)
+            .await
+            .unwrap_or(Err(Error::Timeout(self.timeout)))
+    }
+
     /// Checks that the API accepts the key, using `GET /v1/models`, which needs
     /// a valid key but doesn't run the model.
     pub async fn validate_auth(&self) -> Result<(), Error> {
@@ -158,8 +170,7 @@ impl Client {
                     .header(CONTENT_TYPE, "application/json")
                     .body(body.clone())
             })
-            .await
-            .map_err(point_to_auth_validate)?;
+            .await?;
         take_answer(response, id)
     }
 
@@ -170,9 +181,8 @@ impl Client {
         deadline: Instant,
         request: impl Fn() -> RequestBuilder,
     ) -> Result<HttpDetails, Error> {
-        tokio::time::timeout_at(deadline, self.send_with_retries(deadline, request))
+        self.within(deadline, self.send_with_retries(deadline, request))
             .await
-            .unwrap_or(Err(Error::Timeout(self.timeout)))
     }
 
     /// Returns the status and body of the first successful response. The body is
@@ -239,14 +249,12 @@ async fn error_from_response(response: Response) -> Error {
     }
 }
 
-const INVALID_KEY: &str = "invalid or missing API key";
-
 /// The one-line message for a status that isn't retried. See the table in
 /// `docs/api-client.md`.
 fn rejection_message(code: u16, body: &str) -> String {
     let message = match code {
         400 => bad_request_message(body),
-        401 => Some(INVALID_KEY.to_owned()),
+        401 => Some("invalid or missing API key".to_owned()),
         413 => Some(BODY_TOO_LARGE.to_owned()),
         415 => Some("internal error: the API rejected the request encoding".to_owned()),
         422 => validation_message(body),
@@ -307,17 +315,6 @@ fn field_path(loc: &[Value]) -> String {
 
 fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// Adds the pointer that `gutcheck auth validate` itself shouldn't print.
-fn point_to_auth_validate(error: Error) -> Error {
-    match error {
-        Error::Rejected { details, .. } if details.status == 401 => Error::Rejected {
-            message: format!("{INVALID_KEY}; check it with `gutcheck auth validate`"),
-            details,
-        },
-        other => other,
-    }
 }
 
 /// Pulls the answer for question `id` out of a successful response.

@@ -90,13 +90,12 @@ async fn run(cli: Cli) -> Result<(), Error> {
             let client = Client::new(&settings, &api_key_from_env()?)?;
             // The timeout covers the whole command, so it includes waiting on stdin.
             let deadline = client.deadline();
-            let state = tokio::time::timeout_at(deadline, read_state(args.state))
-                .await
-                .unwrap_or(Err(Error::Timeout(settings.timeout)))?;
+            let state = client.within(deadline, read_state(args.state)).await?;
             let question = Question::noul(args.question, args.if_true, args.if_false);
             let answer = client
                 .ask_question(state.into(), question, deadline)
-                .await?;
+                .await
+                .map_err(point_to_auth_validate)?;
             let output = if args.json {
                 answer_json(&answer)?
             } else if args.boolean {
@@ -120,10 +119,9 @@ async fn run(cli: Cli) -> Result<(), Error> {
 
 /// Picks the state from `--state` or stdin. See `docs/cli-interface.md`.
 async fn read_state(flag: Option<String>) -> Result<String, Error> {
-    let stdin_is_terminal = io::stdin().is_terminal();
     match flag {
         Some(state) => Ok(state),
-        None if !stdin_is_terminal => {
+        None if !io::stdin().is_terminal() => {
             // One byte past the limit is enough to know it's too large.
             let limit = MAX_BODY_BYTES as u64 + 1;
             let mut bytes = Vec::new();
@@ -140,6 +138,18 @@ async fn read_state(flag: Option<String>) -> Result<String, Error> {
                 .map_err(|_| Error::Usage("stdin is not valid UTF-8".to_owned()))
         }
         None => Err(no_state()),
+    }
+}
+
+/// Adds the pointer to `gutcheck auth validate` to a rejected key. Every command
+/// but `auth validate` itself uses it. See `docs/api-client.md`.
+fn point_to_auth_validate(error: Error) -> Error {
+    match error {
+        Error::Rejected { message, details } if details.status == 401 => Error::Rejected {
+            message: format!("{message}; check it with `gutcheck auth validate`"),
+            details,
+        },
+        other => other,
     }
 }
 

@@ -1,4 +1,5 @@
 [tools]
+jq = "1.8.2"
 rumdl = "0.3.2"
 rust = { version = "1.99.1", components = "clippy,rustfmt" }
 usage = "7.3.0"
@@ -43,11 +44,12 @@ run = "cargo test"
 description = "Download the latest OpenAPI spec to spec/openapi.json"
 # Pretty-printed so that changes to the spec are readable in review.
 run = """
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-curl -fsSL https://api.typesafe.ai/openapi.json -o "$tmp/download.json"
-jq -e . "$tmp/download.json" > "$tmp/openapi.json"
-mv "$tmp/openapi.json" spec/openapi.json
+#!/usr/bin/env bash
+set -euo pipefail
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+curl -fsSL https://api.typesafe.ai/openapi.json | jq -e . > "$tmp"
+mv "$tmp" spec/openapi.json
 """
 
 [tasks."spec:usage"]

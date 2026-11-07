@@ -372,8 +372,17 @@ async fn ask_cancels_a_slow_response_at_the_deadline() {
     assert!(start.elapsed() < Duration::from_secs(5));
 }
 
+#[rstest]
+#[case::wrong_state_type(json!(1), "state: must be a string, object or array")]
+#[case::oversized_body(
+    json!("x".repeat(32 * 1024 * 1024)),
+    "request body is over the API's 32 MiB limit"
+)]
 #[tokio::test]
-async fn ask_runs_local_checks_before_sending() {
+async fn ask_runs_local_checks_before_sending(
+    #[case] state: serde_json::Value,
+    #[case] message: &str,
+) {
     let server = MockServer::start().await;
     Mock::given(path("/v1/systemone"))
         .respond_with(ResponseTemplate::new(200))
@@ -382,44 +391,17 @@ async fn ask_runs_local_checks_before_sending() {
         .await;
 
     let error = client(&server.uri(), 0, LONG)
-        .ask_question(json!(1), noul(), soon())
+        .ask_question(state, noul(), soon())
         .await
         .unwrap_err();
 
     assert!(matches!(error, Error::Usage(_)), "{error}");
-    assert_eq!(
-        error.to_string(),
-        "state: must be a string, object or array"
-    );
-}
-
-#[tokio::test]
-async fn ask_rejects_an_oversized_body_before_sending() {
-    let server = MockServer::start().await;
-    Mock::given(path("/v1/systemone"))
-        .respond_with(ResponseTemplate::new(200))
-        .expect(0)
-        .mount(&server)
-        .await;
-
-    let error = client(&server.uri(), 0, LONG)
-        .ask_question(json!("x".repeat(32 * 1024 * 1024)), noul(), soon())
-        .await
-        .unwrap_err();
-
-    assert_eq!(
-        error.to_string(),
-        "request body is over the API's 32 MiB limit"
-    );
+    assert_eq!(error.to_string(), message);
 }
 
 #[rstest]
 #[case::bad_request(400, include_str!("fixtures/bad_request_400.json"), "max_tokens_exceeded")]
-#[case::unauthorized(
-    401,
-    "",
-    "invalid or missing API key; check it with `gutcheck auth validate`"
-)]
+#[case::unauthorized(401, "", "invalid or missing API key")]
 #[case::too_large(413, "", "request body is over the API's 32 MiB limit")]
 #[case::encoding(415, "", "internal error: the API rejected the request encoding")]
 #[case::validation(

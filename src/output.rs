@@ -1,15 +1,13 @@
 //! Formatting for plain numeric CLI output, shared by the text question types.
 
 /// Maximum decimal places in plain output. JSON and threshold comparisons do not use it.
-pub(crate) const PLAIN_DECIMAL_PLACES: usize = 3;
+const PLAIN_DECIMAL_PLACES: usize = 3;
 
 pub(crate) fn number_text(value: f64) -> String {
     let text = format!("{value:.PLAIN_DECIMAL_PLACES$}");
-    let text = if text.contains('.') {
-        text.trim_end_matches('0').trim_end_matches('.')
-    } else {
-        &text
-    };
+    // A finite value always has a decimal point, so trimming zeros never reaches the
+    // integer part. `NaN` and `inf` have no zeros to trim.
+    let text = text.trim_end_matches('0').trim_end_matches('.');
     if text == "-0" {
         "0".to_owned()
     } else {

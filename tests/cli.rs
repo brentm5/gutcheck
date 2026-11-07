@@ -251,6 +251,14 @@ async fn mock_noul(server: &MockServer, expected: serde_json::Value) {
         .await;
 }
 
+/// Answers every request with `status` and `body`.
+async fn mock_systemone(server: &MockServer, status: u16, body: &str) {
+    Mock::given(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(status).set_body_string(body))
+        .mount(server)
+        .await;
+}
+
 /// Fails the test if any request reaches the API.
 async fn expect_no_requests(server: &MockServer) {
     Mock::given(path("/v1/systemone"))
@@ -364,17 +372,23 @@ async fn noul_rejects_stdin_that_is_not_utf8() {
         .stderr("error: stdin is not valid UTF-8\n");
 }
 
-/// Runs `gutcheck ask noul` with a stdin pipe that stays open and silent, as a
-/// parent process might leave it.
-fn noul_with_silent_stdin(config: &NamedTempFile, args: &[&str]) -> std::process::Output {
-    let mut child = StdCommand::new(assert_cmd::cargo::cargo_bin("gutcheck"))
+fn noul_with_stdin(config: &NamedTempFile, args: &[&str], stdin: impl Into<Stdio>) -> StdCommand {
+    let mut command = StdCommand::new(assert_cmd::cargo::cargo_bin("gutcheck"));
+    command
         .args(["ask", "noul", "Is it urgent?", "--config"])
         .arg(config.path())
         .args(args)
         .env("TYPESAFE_API_KEY", "test-key")
-        .stdin(Stdio::piped())
+        .stdin(stdin)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
+}
+
+/// Runs `gutcheck ask noul` with a stdin pipe that stays open and silent, as a
+/// parent process might leave it.
+fn noul_with_silent_stdin(config: &NamedTempFile, args: &[&str]) -> std::process::Output {
+    let mut child = noul_with_stdin(config, args, Stdio::piped())
         .spawn()
         .unwrap();
     let stdin = child.stdin.take();
@@ -394,27 +408,10 @@ async fn state_flag_works_when_stdin_stays_open_and_silent() {
     assert_eq!(String::from_utf8(output.stdout).unwrap(), NOUL_OUTPUT);
 }
 
-fn noul_with_stdin(config: &NamedTempFile, args: &[&str], stdin: impl Into<Stdio>) -> StdCommand {
-    let mut command = StdCommand::new(assert_cmd::cargo::cargo_bin("gutcheck"));
-    command
-        .args(["ask", "noul", "Is it urgent?", "--config"])
-        .arg(config.path())
-        .args(args)
-        .env("TYPESAFE_API_KEY", "test-key")
-        .stdin(stdin)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    command
-}
-
 #[tokio::test]
 async fn state_flag_works_when_stdin_has_nothing_to_read() {
     let server = MockServer::start().await;
-    Mock::given(path("/v1/systemone"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(NOUL_SUCCESS))
-        .expect(4)
-        .mount(&server)
-        .await;
+    mock_systemone(&server, 200, NOUL_SUCCESS).await;
     let config = config_for(&server);
 
     let (closed_pipe, writer) = std::io::pipe().unwrap();
@@ -556,10 +553,7 @@ async fn timeout_covers_waiting_on_stdin() {
 async fn noul_reports_api_errors_with_verbose_details() {
     let server = MockServer::start().await;
     let body = include_str!("fixtures/validation_error_422.json");
-    Mock::given(path("/v1/systemone"))
-        .respond_with(ResponseTemplate::new(422).set_body_string(body))
-        .mount(&server)
-        .await;
+    mock_systemone(&server, 422, body).await;
 
     ask_noul(&config_for(&server))
         .args(["--state", "text", "--verbose"])
@@ -569,6 +563,19 @@ async fn noul_reports_api_errors_with_verbose_details() {
         .stderr(format!(
             "error: questions.noul.criteria: Field required\nHTTP status: 422\nresponse body: {body}\n"
         ));
+}
+
+#[tokio::test]
+async fn noul_points_a_rejected_key_to_auth_validate() {
+    let server = MockServer::start().await;
+    mock_systemone(&server, 401, "").await;
+
+    ask_noul(&config_for(&server))
+        .args(["--state", "text"])
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr("error: invalid or missing API key; check it with `gutcheck auth validate`\n");
 }
 
 #[test]
@@ -581,13 +588,6 @@ fn noul_needs_the_api_key_before_reading_state() {
         .code(1)
         .stdout("")
         .stderr("error: TYPESAFE_API_KEY is not set\n");
-}
-
-async fn mock_any_noul(server: &MockServer) {
-    Mock::given(path("/v1/systemone"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(NOUL_SUCCESS))
-        .mount(server)
-        .await;
 }
 
 // The mock answers with a probability of 0.91.
@@ -603,7 +603,7 @@ async fn mock_any_noul(server: &MockServer) {
 #[tokio::test]
 async fn noul_output_follows_the_flags(#[case] flags: &[&str], #[case] expected: &str) {
     let server = MockServer::start().await;
-    mock_any_noul(&server).await;
+    mock_systemone(&server, 200, NOUL_SUCCESS).await;
 
     ask_noul(&config_for(&server))
         .args(["--state", "text"])
@@ -617,13 +617,12 @@ async fn noul_output_follows_the_flags(#[case] flags: &[&str], #[case] expected:
 #[tokio::test]
 async fn noul_false_answer_still_succeeds() {
     let server = MockServer::start().await;
-    Mock::given(path("/v1/systemone"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(r#"{"answers":{"noul":{"type":"noul","noul":0}}}"#),
-        )
-        .mount(&server)
-        .await;
+    mock_systemone(
+        &server,
+        200,
+        r#"{"answers":{"noul":{"type":"noul","noul":0}}}"#,
+    )
+    .await;
 
     ask_noul(&config_for(&server))
         .args(["--state", "text", "--boolean"])
@@ -632,57 +631,27 @@ async fn noul_false_answer_still_succeeds() {
         .stdout("false\n");
 }
 
+/// Flag errors are caught while parsing, before the API key is even needed.
 #[rstest]
-#[case::above_range("1.5")]
-#[case::below_range("-0.1")]
-#[case::not_a_number("NaN")]
-#[case::text("high")]
-fn invalid_thresholds_exit_1(#[case] threshold: &str) {
+#[case::threshold_above_range(&["--boolean", "--threshold=1.5"], "must be a number from 0 to 1")]
+#[case::threshold_below_range(&["--boolean", "--threshold=-0.1"], "must be a number from 0 to 1")]
+#[case::threshold_not_a_number(&["--boolean", "--threshold=NaN"], "must be a number from 0 to 1")]
+#[case::threshold_text(&["--boolean", "--threshold=high"], "must be a number from 0 to 1")]
+#[case::boolean_with_json(&["--boolean", "--json"], "cannot be used with")]
+#[case::threshold_without_boolean(&["--threshold", "0.7"], "--boolean")]
+#[case::repeated_state(&["--state", "second"], "multiple times")]
+#[case::repeated_boolean(&["--boolean", "--boolean"], "multiple times")]
+#[case::repeated_threshold(&["--boolean", "--threshold", "0.5", "--threshold", "0.7"], "multiple times")]
+#[case::repeated_global(&["--verbose", "--verbose"], "multiple times")]
+fn flag_errors_exit_1(#[case] flags: &[&str], #[case] stderr_contains: &str) {
     ask_noul(&config_with(""))
         .env_remove("TYPESAFE_API_KEY")
-        .args(["--state", "text", "--boolean"])
-        .arg(format!("--threshold={threshold}"))
-        .assert()
-        .code(1)
-        .stdout("")
-        .stderr(predicate::str::contains("must be a number from 0 to 1"));
-}
-
-#[test]
-fn boolean_and_json_cannot_be_combined() {
-    ask_noul(&config_with(""))
-        .env_remove("TYPESAFE_API_KEY")
-        .args(["--state", "text", "--boolean", "--json"])
-        .assert()
-        .code(1)
-        .stdout("")
-        .stderr(predicate::str::contains("cannot be used with"));
-}
-
-#[test]
-fn threshold_requires_boolean() {
-    ask_noul(&config_with(""))
-        .env_remove("TYPESAFE_API_KEY")
-        .args(["--state", "text", "--threshold", "0.7"])
-        .assert()
-        .code(1)
-        .stdout("")
-        .stderr(predicate::str::contains("--boolean"));
-}
-
-#[rstest]
-#[case::state(&["--state", "first", "--state", "second"])]
-#[case::boolean(&["--boolean", "--boolean"])]
-#[case::threshold(&["--boolean", "--threshold", "0.5", "--threshold", "0.7"])]
-#[case::global(&["--verbose", "--verbose"])]
-fn repeated_single_value_flags_are_rejected(#[case] flags: &[&str]) {
-    ask_noul(&config_with(""))
-        .env_remove("TYPESAFE_API_KEY")
+        .args(["--state", "text"])
         .args(flags)
         .assert()
         .code(1)
         .stdout("")
-        .stderr(predicate::str::contains("multiple times"));
+        .stderr(predicate::str::contains(stderr_contains));
 }
 
 #[rstest]
@@ -703,11 +672,7 @@ async fn noul_rounding_only_affects_plain_numeric_output(
 ) {
     let server = MockServer::start().await;
     let body = format!(r#"{{"answers":{{"noul":{{"type":"noul","noul":{number}}}}}}}"#);
-    Mock::given(path("/v1/systemone"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(body))
-        .expect(1)
-        .mount(&server)
-        .await;
+    mock_systemone(&server, 200, &body).await;
 
     ask_noul(&config_for(&server))
         .args(["--state", "text"])

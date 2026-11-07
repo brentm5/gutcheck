@@ -194,7 +194,7 @@ impl FromStr for Threshold {
 #[cfg(test)]
 mod tests {
     use std::ffi::OsStr;
-    use std::process::Command;
+    use std::process::{Command, Stdio};
 
     use super::Cli;
 
@@ -235,7 +235,32 @@ mod tests {
             (&["auth", "validate"], true),
         ];
 
-        for (args, expected_valid) in cases {
+        // Start every portable check first so they run side by side.
+        let children: Vec<_> = cases
+            .iter()
+            .map(|(args, _)| {
+                Command::new("usage")
+                    .args([
+                        "explain",
+                        "--format",
+                        "json",
+                        "--env",
+                        "SPEC_TEST=1",
+                        "--spec",
+                        &spec,
+                        "--",
+                        "gutcheck",
+                    ])
+                    .args(*args)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .expect("Usage CLI must be on PATH: run mise install, then mise run test")
+            })
+            .collect();
+
+        for ((args, expected_valid), child) in cases.iter().zip(children) {
             let argv: Vec<_> = args.iter().map(OsStr::new).collect();
             let native = Cli::parse_from(&argv);
             assert_eq!(
@@ -244,21 +269,7 @@ mod tests {
                 "native: {args:?}: {native:?}"
             );
 
-            let output = Command::new("usage")
-                .args([
-                    "explain",
-                    "--format",
-                    "json",
-                    "--env",
-                    "SPEC_TEST=1",
-                    "--spec",
-                    &spec,
-                    "--",
-                    "gutcheck",
-                ])
-                .args(*args)
-                .output()
-                .expect("Usage CLI must be on PATH: run mise install, then mise run test");
+            let output = child.wait_with_output().unwrap();
             assert!(
                 output.status.success(),
                 "{}",

@@ -2,6 +2,7 @@
 //! See `docs/testing.md`.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use gutcheck::Question;
 use gutcheck::api::{SystemOneRequest, SystemOneResponse};
@@ -9,13 +10,16 @@ use jsonschema::Validator;
 use rstest::rstest;
 use serde_json::{Value, json};
 
-const SPEC: &str = include_str!("../spec/openapi.json");
+/// The spec's schemas, parsed once for all the tests.
+static COMPONENTS: LazyLock<Value> = LazyLock::new(|| {
+    let mut spec: Value = serde_json::from_str(include_str!("../spec/openapi.json")).unwrap();
+    spec["components"].take()
+});
 
 fn validator(schema: &str) -> Validator {
-    let spec: Value = serde_json::from_str(SPEC).unwrap();
     jsonschema::validator_for(&json!({
         "$ref": format!("#/components/schemas/{schema}"),
-        "components": spec["components"],
+        "components": *COMPONENTS,
     }))
     .unwrap()
 }
