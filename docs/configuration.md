@@ -76,6 +76,8 @@ Two settings can be overridden per command with a flag:
 
 Order of precedence, highest first: **flag → config file → default.**
 
+**Decision:** a blank `model` counts as not set. The value is trimmed, and if nothing is left, the next level is used: `--model ""` falls back to the config file, and `model = ""` in the config file falls back to the default `jev-latest`. So every request names a model, and `gutcheck --model "$MODEL" ...` uses the configured model when `$MODEL` is empty.
+
 ## API key
 
 The API key comes only from the `TYPESAFE_API_KEY` environment variable, the same one TypeSafe's SDKs use. It can't be set in the config file, so the key is never written to disk in plain text.

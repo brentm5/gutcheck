@@ -22,13 +22,13 @@ These run before any request is sent. Limits come from TypeSafe's [OpenAPI spec]
 
 ### Request
 
-| Check        | Rule                                                        |
-| ------------ | ----------------------------------------------------------- |
-| `model`      | Present (filled in from config if the caller didn't set it) |
-| `state`      | Present and not empty. A string, object or array            |
-| `questions`  | An object with at least one entry                           |
-| Question IDs | Non-empty strings                                           |
-| Body size    | At most 32 MiB once encoded                                 |
+| Check        | Rule                                                                                                                               |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `model`      | Present (filled in from config if the caller didn't set it or left it blank; see [`configuration.md`](configuration.md#overrides)) |
+| `state`      | Present. A string, object or array, which may be empty                                                                             |
+| `questions`  | An object with at least one entry                                                                                                  |
+| Question IDs | Non-empty strings                                                                                                                  |
+| Body size    | At most 32 MiB once encoded                                                                                                        |
 
 ### Questions
 
@@ -58,7 +58,7 @@ TypeSafe returns these errors. The response bodies are defined in the OpenAPI sp
 | `401`                                            | Missing or invalid API key                                                                                                      | —                                                          | Report "invalid or missing API key" and point to `gutcheck auth validate` (except on `auth validate` itself). Do not retry |
 | `413`                                            | Body over 32 MiB                                                                                                                | —                                                          | Report the size limit. Do not retry. Local checks should normally catch this first                                         |
 | `415`                                            | Unsupported compression                                                                                                         | —                                                          | Should never happen, since we control encoding. Report as an internal error                                                |
-| `422`                                            | Validation failed                                                                                                               | `{ "detail": [{ "loc", "msg", "type", "input", "ctx" }] }` | Report each entry as `<loc>: <msg>`, e.g. `questions.urgency.criteria: Field required`. Do not retry                       |
+| `422`                                            | Validation failed                                                                                                               | `{ "detail": [{ "loc", "msg", "type", "input", "ctx" }] }` | Report each entry as `<loc>: <msg>`, joined with `; `, e.g. `questions.urgency.criteria: Field required`. Do not retry     |
 | `408`, `429`, `5xx` (including `529 Overloaded`) | Timeout, rate limit, or server problem                                                                                          | —                                                          | Retry with backoff (see below), then report                                                                                |
 | Network error or timeout                         | —                                                                                                                               | —                                                          | Retry with backoff, then report                                                                                            |
 
@@ -66,7 +66,9 @@ Redirects aren't followed. A `3xx` is reported as an unexpected response and isn
 
 For `422`, the `loc` path starts with `"body"`. We drop that prefix and join the rest with dots so the path matches the field names the caller used.
 
-**Not implemented yet:** the `400`, `413`, `415` and `422` mappings, and the `401` pointer, arrive with the first `ask` command. `gutcheck auth validate` is the only caller so far and sends no request body, so until then these statuses are reported as `unexpected API response (HTTP <status>)`.
+If a `400` or `422` body doesn't have the documented shape, or its `detail` or every `msg` is empty, the error is reported as `unexpected API response (HTTP <status>)`. So is a `2xx` response without a usable answer, using the message `unexpected API response: it has no usable answer`. Neither is retried, and `--verbose` shows the body.
+
+**Not implemented yet:** `gutcheck ask noul` is the only command that sends questions so far. The `choice` and `score` checks and the pass-through for unknown question types arrive with `ask choice`, `ask score` and `ask_jev`.
 
 With `--verbose`, errors are printed in full (status code and raw body), which helps when the API's error doesn't fit the mapping above.
 
