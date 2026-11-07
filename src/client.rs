@@ -1,15 +1,23 @@
 //! The HTTP client: authentication, retries and the overall timeout.
 //! See `docs/api-client.md`.
 
+use std::collections::BTreeMap;
 use std::env::{self, VarError};
 use std::error::Error as _;
 use std::hash::{BuildHasher, RandomState};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+use bytes::Bytes;
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::redirect::Policy;
 use reqwest::{RequestBuilder, Response, StatusCode};
+use serde_json::Value;
+use tokio::time::Instant;
 
+use crate::api::{
+    Answer, BadRequestBody, Question, SystemOneRequest, SystemOneResponse, ValidationBody,
+};
+use crate::checks::{BODY_TOO_LARGE, check_body_size, check_request};
 use crate::config::Settings;
 use crate::error::{Error, HttpDetails};
 
@@ -64,6 +72,7 @@ pub struct Client {
     http: reqwest::Client,
     auth: HeaderValue,
     base_url: String,
+    model: String,
     retries: u32,
     timeout: Duration,
     backoff: Backoff,
@@ -86,6 +95,7 @@ impl Client {
             http,
             auth,
             base_url: settings.base_url.as_str().trim_end_matches('/').to_owned(),
+            model: settings.model.clone(),
             retries: settings.retries,
             timeout: settings.timeout,
             backoff: Backoff::default(),
@@ -99,32 +109,91 @@ impl Client {
         self
     }
 
+    /// When an operation starting now runs out of time. A timeout too long for the
+    /// clock to represent means roughly no limit.
+    pub fn deadline(&self) -> Instant {
+        const FAR_FUTURE: Duration = Duration::from_secs(60 * 60 * 24 * 365);
+        let now = Instant::now();
+        now.checked_add(self.timeout).unwrap_or(now + FAR_FUTURE)
+    }
+
     /// Checks that the API accepts the key, using `GET /v1/models`, which needs
     /// a valid key but doesn't run the model.
     pub async fn validate_auth(&self) -> Result<(), Error> {
         let url = format!("{}/v1/models", self.base_url);
-        self.send(|| self.http.get(&url)).await.map(drop)
+        self.send(self.deadline(), || self.http.get(&url))
+            .await
+            .map(drop)
     }
 
-    /// Sends a request with retries, all within the overall timeout. Dropping
-    /// the future when the timeout fires cancels the request in progress.
-    async fn send(&self, request: impl Fn() -> RequestBuilder) -> Result<Response, Error> {
-        tokio::time::timeout(self.timeout, self.send_with_retries(request))
+    /// Asks one question about `state` and returns its answer. Local checks run
+    /// first, so a request that fails them is never sent. `deadline` comes from
+    /// [`Client::deadline`], so a caller can spend part of the time beforehand.
+    pub async fn ask_question(
+        &self,
+        state: Value,
+        question: Question,
+        deadline: Instant,
+    ) -> Result<Answer, Error> {
+        let id = question.kind();
+        let request = SystemOneRequest {
+            model: self.model.clone(),
+            state,
+            questions: BTreeMap::from([(id.to_owned(), question)]),
+        };
+        check_request(&request)?;
+        // `Bytes` makes each retry's copy of the body a reference count bump.
+        let body: Bytes = serde_json::to_vec(&request)
+            .map_err(|e| Error::Usage(format!("could not encode the request: {e}")))?
+            .into();
+        check_body_size(body.len())?;
+        // The body holds everything now, so don't keep a second copy of the state.
+        drop(request);
+
+        let url = format!("{}/v1/systemone", self.base_url);
+        let response = self
+            .send(deadline, || {
+                self.http
+                    .post(&url)
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(body.clone())
+            })
+            .await
+            .map_err(point_to_auth_validate)?;
+        take_answer(response, id)
+    }
+
+    /// Sends a request with retries, all before `deadline`. Dropping the future
+    /// when the deadline passes cancels the request in progress.
+    async fn send(
+        &self,
+        deadline: Instant,
+        request: impl Fn() -> RequestBuilder,
+    ) -> Result<HttpDetails, Error> {
+        tokio::time::timeout_at(deadline, self.send_with_retries(deadline, request))
             .await
             .unwrap_or(Err(Error::Timeout(self.timeout)))
     }
 
+    /// Returns the status and body of the first successful response. The body is
+    /// read here so that reading it counts toward the timeout and gets retried.
     async fn send_with_retries(
         &self,
+        deadline: Instant,
         request: impl Fn() -> RequestBuilder,
-    ) -> Result<Response, Error> {
-        let start = Instant::now();
+    ) -> Result<HttpDetails, Error> {
         let mut attempt = 0;
 
         loop {
             let (error, retry_after) =
                 match request().header(AUTHORIZATION, &self.auth).send().await {
-                    Ok(response) if response.status().is_success() => return Ok(response),
+                    Ok(response) if response.status().is_success() => {
+                        let status = response.status().as_u16();
+                        match response.text().await {
+                            Ok(body) => return Ok(HttpDetails { status, body }),
+                            Err(e) => (network_error(e), None),
+                        }
+                    }
                     Ok(response) => {
                         let retry_after = retry_after(response.headers());
                         let error = error_from_response(response).await;
@@ -140,7 +209,7 @@ impl Client {
                 return Err(error);
             }
             let wait = self.backoff.delay(attempt, retry_after, random_fraction());
-            if wait > self.timeout.saturating_sub(start.elapsed()) {
+            if wait > deadline.saturating_duration_since(Instant::now()) {
                 return Err(error);
             }
             tokio::time::sleep(wait).await;
@@ -162,17 +231,104 @@ async fn error_from_response(response: Response) -> Error {
             message: format!("API temporarily unavailable (HTTP {code})"),
             details: Some(details),
         }
-    } else if status == StatusCode::UNAUTHORIZED {
-        Error::Rejected {
-            message: "invalid or missing API key".to_owned(),
-            details,
-        }
     } else {
         Error::Rejected {
-            message: format!("unexpected API response (HTTP {code})"),
+            message: rejection_message(code, &details.body),
             details,
         }
     }
+}
+
+const INVALID_KEY: &str = "invalid or missing API key";
+
+/// The one-line message for a status that isn't retried. See the table in
+/// `docs/api-client.md`.
+fn rejection_message(code: u16, body: &str) -> String {
+    let message = match code {
+        400 => bad_request_message(body),
+        401 => Some(INVALID_KEY.to_owned()),
+        413 => Some(BODY_TOO_LARGE.to_owned()),
+        415 => Some("internal error: the API rejected the request encoding".to_owned()),
+        422 => validation_message(body),
+        _ => None,
+    };
+    message.unwrap_or_else(|| format!("unexpected API response (HTTP {code})"))
+}
+
+/// `detail` from a `400` body, which is a string or an object. An empty one says
+/// nothing, so it counts as unreadable.
+fn bad_request_message(body: &str) -> Option<String> {
+    let body: BadRequestBody = serde_json::from_str(body).ok()?;
+    match body.detail {
+        Value::String(detail) => Some(one_line(&detail)).filter(|text| !text.is_empty()),
+        Value::Object(ref fields) if !fields.is_empty() => Some(one_line(&body.detail.to_string())),
+        _ => None,
+    }
+}
+
+/// Each entry in a `422` body as `<loc>: <msg>`, joined so the error stays on
+/// one line. Entries with an empty `msg` are left out.
+fn validation_message(body: &str) -> Option<String> {
+    let body: ValidationBody = serde_json::from_str(body).ok()?;
+    let entries: Vec<String> = body
+        .detail
+        .iter()
+        .filter_map(|entry| {
+            let message = one_line(&entry.msg);
+            if message.is_empty() {
+                return None;
+            }
+            let location = field_path(&entry.loc);
+            Some(if location.is_empty() {
+                message
+            } else {
+                format!("{location}: {message}")
+            })
+        })
+        .collect();
+    (!entries.is_empty()).then(|| entries.join("; "))
+}
+
+/// A `loc` as a dotted path, without the leading `body` the caller never wrote.
+fn field_path(loc: &[Value]) -> String {
+    let path = match loc.first().and_then(Value::as_str) {
+        Some("body") => &loc[1..],
+        _ => loc,
+    };
+    let parts: Vec<String> = path
+        .iter()
+        .map(|part| match part {
+            Value::String(name) => name.clone(),
+            other => other.to_string(),
+        })
+        .collect();
+    one_line(&parts.join("."))
+}
+
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Adds the pointer that `gutcheck auth validate` itself shouldn't print.
+fn point_to_auth_validate(error: Error) -> Error {
+    match error {
+        Error::Rejected { details, .. } if details.status == 401 => Error::Rejected {
+            message: format!("{INVALID_KEY}; check it with `gutcheck auth validate`"),
+            details,
+        },
+        other => other,
+    }
+}
+
+/// Pulls the answer for question `id` out of a successful response.
+fn take_answer(details: HttpDetails, id: &str) -> Result<Answer, Error> {
+    let answer = serde_json::from_str::<SystemOneResponse>(&details.body)
+        .ok()
+        .and_then(|mut response| response.answers.remove(id));
+    answer.ok_or_else(|| Error::Rejected {
+        message: "unexpected API response: it has no usable answer".to_owned(),
+        details,
+    })
 }
 
 fn is_retryable(status: StatusCode) -> bool {
@@ -237,6 +393,64 @@ mod tests {
 
     fn delay(attempt: u32, retry_after: Option<Duration>, random: f64) -> Duration {
         Backoff::default().delay(attempt, retry_after, random)
+    }
+
+    #[test]
+    fn validation_entries_drop_body_and_join_on_one_line() {
+        let body = r#"{"detail":[
+            {"loc":["body","questions","noul","criteria"],"msg":"Field required","type":"missing"},
+            {"loc":["body","items",2],"msg":"Too\nlong","type":"too_long"},
+            {"loc":[],"msg":"Bad","type":"bad"}
+        ]}"#;
+        assert_eq!(
+            rejection_message(422, body),
+            "questions.noul.criteria: Field required; items.2: Too long; Bad"
+        );
+    }
+
+    #[test]
+    fn bad_request_reports_string_and_object_details() {
+        assert_eq!(
+            rejection_message(400, r#"{"detail":"max_tokens_exceeded"}"#),
+            "max_tokens_exceeded"
+        );
+        assert_eq!(
+            rejection_message(400, r#"{"detail":{"code":"nesting"}}"#),
+            r#"{"code":"nesting"}"#
+        );
+    }
+
+    #[test]
+    fn unreadable_error_bodies_fall_back_to_the_status() {
+        for code in [400, 422] {
+            assert_eq!(
+                rejection_message(code, "<html>"),
+                format!("unexpected API response (HTTP {code})")
+            );
+        }
+        assert_eq!(
+            rejection_message(422, r#"{"detail":[]}"#),
+            "unexpected API response (HTTP 422)"
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::empty_string(400, r#"{"detail":""}"#)]
+    #[case::blank_string(400, r#"{"detail":" \n "}"#)]
+    #[case::empty_object(400, r#"{"detail":{}}"#)]
+    #[case::empty_message(422, r#"{"detail":[{"loc":["body","state"],"msg":""}]}"#)]
+    #[case::blank_message(422, r#"{"detail":[{"loc":[],"msg":"  "}]}"#)]
+    fn empty_error_details_fall_back_to_the_status(#[case] code: u16, #[case] body: &str) {
+        assert_eq!(
+            rejection_message(code, body),
+            format!("unexpected API response (HTTP {code})")
+        );
+    }
+
+    #[test]
+    fn empty_validation_messages_are_left_out() {
+        let body = r#"{"detail":[{"loc":["body","a"],"msg":""},{"loc":["body","b"],"msg":"Bad"}]}"#;
+        assert_eq!(rejection_message(422, body), "b: Bad");
     }
 
     #[test]

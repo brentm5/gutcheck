@@ -1,54 +1,15 @@
-use std::path::PathBuf;
+use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
-use std::time::Duration;
 
-use clap::{Args, Parser, Subcommand};
-use gutcheck::{Client, Error, Overrides, Settings, api_key_from_env, parse_duration};
+mod cli;
+mod output;
 
-/// Ask TypeSafe's Jev model quick, structured questions.
-#[derive(Debug, Parser)]
-#[command(name = "gutcheck", version, about, arg_required_else_help = true)]
-struct Cli {
-    #[command(flatten)]
-    global: GlobalArgs,
-
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Debug, Args)]
-struct GlobalArgs {
-    /// Path to a config file to use instead of the default
-    #[arg(long, global = true, value_name = "PATH")]
-    config: Option<PathBuf>,
-
-    /// Model to use (default jev-latest)
-    #[arg(long, global = true)]
-    model: Option<String>,
-
-    /// Maximum time for the whole command, including retries (e.g. 10s)
-    #[arg(long, global = true, value_parser = parse_duration, value_name = "DURATION")]
-    timeout: Option<Duration>,
-
-    /// On errors, print the HTTP status and raw API response body
-    #[arg(long, global = true)]
-    verbose: bool,
-}
-
-#[derive(Debug, Subcommand)]
-enum Command {
-    /// Manage API authentication
-    Auth {
-        #[command(subcommand)]
-        command: AuthCommand,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum AuthCommand {
-    /// Check that the API key works
-    Validate,
-}
+use cli::{AskCommand, AuthCommand, Cli, Command};
+use gutcheck::{
+    Answer, Client, Error, MAX_BODY_BYTES, Overrides, Question, Settings, api_key_from_env,
+    check_body_size,
+};
+use tokio::io::AsyncReadExt;
 
 fn main() -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -77,15 +38,24 @@ fn run_without_waiting_for_blocking_work<T>(
 }
 
 async fn cli_main() -> ExitCode {
-    let cli = match Cli::try_parse() {
-        Ok(cli) => cli,
-        Err(error) => {
-            let _ = error.print();
-            // Clap exits 2 on usage errors, but every error here exits 1.
-            return if error.use_stderr() {
-                ExitCode::FAILURE
+    let argv: Vec<_> = std::env::args_os().skip(1).collect();
+    let cli = match Cli::embedded_outcome(&argv) {
+        usage_rs::embedded::Outcome::Parsed(cli) => cli,
+        usage_rs::embedded::Outcome::Exit(exit) => {
+            let result = if exit.stderr {
+                io::stderr().write_all(exit.text.as_bytes())
             } else {
+                io::stdout().write_all(exit.text.as_bytes())
+            };
+            if let Err(error) = result {
+                eprintln!("error: could not write the output: {error}");
+                return ExitCode::FAILURE;
+            }
+            // The parser's default usage-error status is 2; gutcheck uses 1 for every error.
+            return if exit.code == 0 {
                 ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
             };
         }
     };
@@ -109,25 +79,120 @@ async fn run(cli: Cli) -> Result<(), Error> {
         cli.global.config.as_deref(),
         Overrides {
             model: cli.global.model,
-            timeout: cli.global.timeout,
+            timeout: cli.global.timeout.map(|timeout| timeout.0),
         },
     )?;
 
     match cli.command {
-        Command::Auth {
-            command: AuthCommand::Validate,
-        } => {
+        Command::Ask(cli::AskArgs {
+            command: AskCommand::Noul(args),
+        }) => {
+            let client = Client::new(&settings, &api_key_from_env()?)?;
+            // The timeout covers the whole command, so it includes waiting on stdin.
+            let deadline = client.deadline();
+            let state = tokio::time::timeout_at(deadline, read_state(args.state))
+                .await
+                .unwrap_or(Err(Error::Timeout(settings.timeout)))?;
+            let question = Question::noul(args.question, args.if_true, args.if_false);
+            let answer = client
+                .ask_question(state.into(), question, deadline)
+                .await?;
+            let output = if args.json {
+                answer_json(&answer)?
+            } else if args.boolean {
+                let threshold = args
+                    .threshold
+                    .expect("--boolean supplies a threshold through default_if");
+                noul_text(&answer, threshold.0)
+            } else {
+                output::number_text(answer.probability())
+            };
+            print_line(&output)
+        }
+        Command::Auth(cli::AuthArgs {
+            command: AuthCommand::Validate(_),
+        }) => {
             let client = Client::new(&settings, &api_key_from_env()?)?;
             client.validate_auth().await
         }
     }
 }
 
+/// Picks the state from `--state` or stdin. See `docs/cli-interface.md`.
+async fn read_state(flag: Option<String>) -> Result<String, Error> {
+    let stdin_is_terminal = io::stdin().is_terminal();
+    match flag {
+        Some(state) => Ok(state),
+        None if !stdin_is_terminal => {
+            // One byte past the limit is enough to know it's too large.
+            let limit = MAX_BODY_BYTES as u64 + 1;
+            let mut bytes = Vec::new();
+            tokio::io::stdin()
+                .take(limit)
+                .read_to_end(&mut bytes)
+                .await
+                .map_err(|e| Error::Usage(format!("could not read stdin: {e}")))?;
+            if bytes.is_empty() {
+                return Err(no_state());
+            }
+            check_body_size(bytes.len())?;
+            String::from_utf8(bytes)
+                .map_err(|_| Error::Usage("stdin is not valid UTF-8".to_owned()))
+        }
+        None => Err(no_state()),
+    }
+}
+
+fn no_state() -> Error {
+    Error::Usage("no state given: pass --state or pipe it to stdin".to_owned())
+}
+
+/// `true` if the unrounded probability exceeds `threshold`, otherwise `false`.
+fn noul_text(answer: &Answer, threshold: f64) -> String {
+    (answer.probability() > threshold).to_string()
+}
+
+fn answer_json(answer: &Answer) -> Result<String, Error> {
+    serde_json::to_string(answer)
+        .map_err(|e| Error::Output(format!("could not encode the output: {e}")))
+}
+
+fn print_line(line: &str) -> Result<(), Error> {
+    writeln!(io::stdout(), "{line}")
+        .map_err(|e| Error::Output(format!("could not write the output: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
     use std::time::Instant;
 
+    use rstest::rstest;
+
     use super::*;
+
+    #[rstest]
+    #[case::leans_true(0.6, 0.5, "true")]
+    #[case::leans_false(0.4, 0.5, "false")]
+    #[case::exact_middle_at_the_default(0.5, 0.5, "false")]
+    #[case::on_the_cutoff(0.9, 0.9, "false")]
+    #[case::below_a_high_cutoff(0.89, 0.9, "false")]
+    #[case::above_a_low_cutoff(0.02, 0.01, "true")]
+    #[case::below_a_low_cutoff(0.005, 0.01, "false")]
+    #[case::zero_at_zero_cutoff(0.0, 0.0, "false")]
+    #[case::one_at_one_cutoff(1.0, 1.0, "false")]
+    #[case::top_cutoff_needs_certainty(0.999, 1.0, "false")]
+    fn noul_text_compares_with_the_cutoff(
+        #[case] probability: f64,
+        #[case] threshold: f64,
+        #[case] expected: &str,
+    ) {
+        let answer = Answer::Noul {
+            noul: serde_json::Number::from_f64(probability).unwrap(),
+            extra: serde_json::Map::new(),
+        };
+        assert_eq!(noul_text(&answer, threshold), expected);
+    }
 
     #[test]
     fn exit_does_not_wait_for_blocking_work() {

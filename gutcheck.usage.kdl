@@ -1,0 +1,73 @@
+min_usage_version "7.3.0"
+name gutcheck
+bin gutcheck
+version "0.1.0"
+license Apache-2.0
+repository "https://github.com/brentm5/gutcheck"
+about "Ask TypeSafe's Jev model quick, structured questions from the shell or over MCP"
+unknown_flags error
+arg_required_else_help #true
+args_override_self #false
+subcommand_required #true
+flagset global-args {
+    flag --config help="Path to a TOML config file to use instead of the default" global=#true {
+        arg <PATH>
+    }
+    flag --model help="Model to use (default jev-latest)" global=#true {
+        arg <MODEL>
+    }
+    flag --timeout help="Maximum time for the whole operation, including waiting for stdin and retries (e.g. 10s)" global=#true {
+        arg <DURATION>
+    }
+    flag --verbose help="On errors, print the HTTP status and raw API response body" global=#true
+}
+use global-args
+flag "-h --help" help="Print help" action=help builtin=#true
+flag "-V --version" help="Print version" action=version builtin=#true
+exit_code 0 "Command succeeded, regardless of the answer"
+exit_code 1 "Usage, configuration, API, network, timeout or output error"
+cmd ask help="Ask Jev a question about some input text" subcommand_required=#true args_override_self=#false {
+    flag "-h --help" help="Print help" action=help builtin=#true
+    cmd noul help="Estimate the probability that a statement is true" args_override_self=#false {
+        flag --state help="Input text; takes precedence over stdin and leaves it unread" {
+            long_help #"""
+Input text; takes precedence over stdin and leaves it unread
+
+Without --state, read nonterminal stdin as UTF-8 text until EOF, preserving trailing newlines. Waiting for stdin counts toward --timeout. An explicit empty string supplies a state; empty stdin does not.
+"""#
+            arg <TEXT>
+        }
+        flag --true help="What counts as yes" {
+            arg <TEXT>
+        }
+        flag --false help="What counts as no" {
+            arg <TEXT>
+        }
+        flag --boolean help="Print true when probability > threshold, otherwise false (default cutoff 0.5)" conflicts=--json {
+            long_help #"""
+Print true when probability > threshold, otherwise false (default cutoff 0.5)
+
+Equality prints false. Compare the unrounded API value, independently of plain-output rounding. Both true and false are successful answers.
+"""#
+        }
+        flag --threshold help="Boolean cutoff from 0 to 1; requires --boolean and defaults to 0.5 in that mode" requires=--boolean {
+            default_if --boolean "0.5"
+            arg <0-1> validate="value matches \"^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$\" && float(value) >= 0 && float(value) <= 1" validate_error="must be a number from 0 to 1"
+        }
+        flag --json help="Print the full answer object as one line of JSON, without display rounding"
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <QUESTION> help="The yes/no question or statement to evaluate"
+        example "gutcheck ask noul \"The message is urgent\" --state \"Production is down\"" header="Read the probability"
+        example "gutcheck ask noul \"The message is urgent\" --boolean --threshold 0.9 --state \"Production is down\"" header="Make a boolean decision"
+        output plain help="Probability as an ordinary decimal, rounded to at most three decimal places, with trailing zeros removed" default=#true
+        output boolean help="true only when the unrounded probability is greater than the threshold; otherwise false" select=--boolean
+        output json media_type="application/json" framing=json help="The full API answer object, without display rounding" select=--json
+    }
+}
+cmd auth help="Manage API authentication" subcommand_required=#true args_override_self=#false {
+    flag "-h --help" help="Print help" action=help builtin=#true
+    cmd validate help="Check that TYPESAFE_API_KEY is set and accepted by the API" args_override_self=#false {
+        flag "-h --help" help="Print help" action=help builtin=#true
+        output silent help="No stdout; the exit code reports whether validation succeeded" default=#true
+    }
+}
