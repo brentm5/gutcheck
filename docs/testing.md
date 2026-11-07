@@ -53,7 +53,7 @@ In `tests/`, using assert_cmd to run the real `gutcheck` binary against wiremock
 - Choice options: bare keys and keys with descriptions, including a mixture of the two, produce the intended request and print the selected key. Split descriptions at the first `=` only, preserve later `=` characters, and reject empty or duplicate keys, including duplicates across the two forms.
 - Noul output modes: plain output is the probability rounded to at most three decimal places; `--boolean` uses the unrounded value, a default cutoff of `0.5` and a strict `>` comparison, including equality at custom cutoffs. Cover thresholds `0` and `1`, invalid values, `--threshold` without `--boolean`, the `--boolean`/`--json` conflict, and JSON retaining precision.
 - Score levels: flag order defines the zero-based rubric; a fractional answer uses the common plain-number display rule without snapping to a level or rescaling, and `--json` retains the answer's legend, probabilities and confidence.
-- Parser contracts: repeated single-value flags are rejected, help/version succeed, errors exit `1`, and the binary's `__usage_spec__` output matches the checked-in generated KDL.
+- Parser contracts: repeated single-value flags are rejected, requested help and `--version` print to stdout and exit `0`, a missing command prints help to stderr and exits `1`, errors exit `1`, and the binary's `__usage_spec__` output matches the checked-in generated KDL.
 - `gutcheck auth validate` against a mock `GET /v1/models`.
 - `gutcheck skill` prints the embedded skill.
 

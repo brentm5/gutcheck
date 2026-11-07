@@ -3,8 +3,9 @@
 
 use std::time::{Duration, Instant};
 
+use gutcheck::api::{NoulCriteria, Question};
 use gutcheck::client::Backoff;
-use gutcheck::{Client, Error, Question, Settings};
+use gutcheck::{Client, Error, Settings};
 use rstest::rstest;
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path};
@@ -265,7 +266,13 @@ async fn invalid_key_characters_are_reported_without_the_key() {
 }
 
 fn noul() -> Question {
-    Question::noul("Is it urgent?".to_owned(), Some("Yes".to_owned()), None)
+    Question::noul(
+        "Is it urgent?".to_owned(),
+        NoulCriteria {
+            if_true: Some("Yes".to_owned()),
+            if_false: None,
+        },
+    )
 }
 
 async fn mock_systemone(server: &MockServer, status: u16, body: &str) {
@@ -401,7 +408,11 @@ async fn ask_runs_local_checks_before_sending(
 
 #[rstest]
 #[case::bad_request(400, include_str!("fixtures/bad_request_400.json"), "max_tokens_exceeded")]
-#[case::unauthorized(401, "", "invalid or missing API key")]
+#[case::unauthorized(
+    401,
+    "",
+    "invalid or missing API key; check it with `gutcheck auth validate`"
+)]
 #[case::too_large(413, "", "request body is over the API's 32 MiB limit")]
 #[case::encoding(415, "", "internal error: the API rejected the request encoding")]
 #[case::validation(

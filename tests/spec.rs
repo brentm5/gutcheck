@@ -4,8 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use gutcheck::Question;
-use gutcheck::api::{SystemOneRequest, SystemOneResponse};
+use gutcheck::api::{NoulCriteria, Question, SystemOneRequest, SystemOneResponse};
 use jsonschema::Validator;
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -46,8 +45,10 @@ fn noul_requests_match_the_spec(#[case] if_true: Option<&str>, #[case] if_false:
             "noul".to_owned(),
             Question::noul(
                 "Is it?".to_owned(),
-                if_true.map(str::to_owned),
-                if_false.map(str::to_owned),
+                NoulCriteria {
+                    if_true: if_true.map(str::to_owned),
+                    if_false: if_false.map(str::to_owned),
+                },
             ),
         )]),
     };

@@ -11,6 +11,9 @@ use serde::{Deserialize, Deserializer};
 
 use crate::error::Error;
 
+/// The model used when neither `--model` nor the config file names one.
+pub const DEFAULT_MODEL: &str = "jev-latest";
+
 /// Settings after applying defaults, the config file and flags.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
@@ -30,7 +33,7 @@ pub struct Overrides {
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct ConfigFile {
-    model: String,
+    model: Option<String>,
     retries: u32,
     #[serde(deserialize_with = "deserialize_duration")]
     timeout: Duration,
@@ -40,7 +43,7 @@ struct ConfigFile {
 impl Default for ConfigFile {
     fn default() -> Self {
         Self {
-            model: "jev-latest".to_owned(),
+            model: None,
             retries: 2,
             timeout: Duration::from_secs(30),
             base_url: "https://api.typesafe.ai".to_owned(),
@@ -78,12 +81,23 @@ impl Settings {
         };
 
         Ok(Self {
-            model: overrides.model.unwrap_or(file.model),
+            model: resolve_model(overrides.model, file.model),
             retries: file.retries,
             timeout: overrides.timeout.unwrap_or(file.timeout),
             base_url: parse_base_url(&file.base_url)?,
         })
     }
+}
+
+/// The first of the flag and the config file value that isn't blank, trimmed,
+/// or else [`DEFAULT_MODEL`]. A blank value counts as not set.
+fn resolve_model(flag: Option<String>, file: Option<String>) -> String {
+    [flag, file]
+        .into_iter()
+        .flatten()
+        .map(|model| model.trim().to_owned())
+        .find(|model| !model.is_empty())
+        .unwrap_or_else(|| DEFAULT_MODEL.to_owned())
 }
 
 /// Reads the default config file. It's missing if the file doesn't exist, or if
@@ -226,6 +240,33 @@ mod tests {
         .unwrap();
         assert_eq!(settings.model, "jev-2");
         assert_eq!(settings.timeout, Duration::from_secs(1));
+    }
+
+    #[rstest::rstest]
+    #[case::nothing_set(None, None, "jev-latest")]
+    #[case::file_only(None, Some("jev-1"), "jev-1")]
+    #[case::flag_wins(Some("jev-2"), Some("jev-1"), "jev-2")]
+    #[case::empty_flag_uses_file(Some(""), Some("jev-1"), "jev-1")]
+    #[case::blank_flag_uses_file(Some("  "), Some("jev-1"), "jev-1")]
+    #[case::empty_file_uses_default(None, Some(""), "jev-latest")]
+    #[case::all_blank_uses_default(Some(" "), Some("\t"), "jev-latest")]
+    #[case::values_are_trimmed(Some(" jev-2 "), None, "jev-2")]
+    fn blank_models_count_as_not_set(
+        #[case] flag: Option<&str>,
+        #[case] file: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        let contents = file.map_or(String::new(), |model| format!("model = {model:?}"));
+        let file = config_file(&contents);
+        let settings = Settings::load(
+            Some(file.path()),
+            Overrides {
+                model: flag.map(str::to_owned),
+                timeout: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(settings.model, expected);
     }
 
     #[test]

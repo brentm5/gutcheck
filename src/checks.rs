@@ -12,9 +12,6 @@ pub const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const BODY_TOO_LARGE: &str = "request body is over the API's 32 MiB limit";
 
 pub(crate) fn check_request(request: &SystemOneRequest) -> Result<(), Error> {
-    if request.model.is_empty() {
-        return Err(failed("model: must not be empty"));
-    }
     match &request.state {
         Value::String(_) | Value::Array(_) | Value::Object(_) => Ok(()),
         _ => Err(failed("state: must be a string, object or array")),
@@ -50,7 +47,7 @@ mod tests {
     use crate::api::Question;
 
     fn request(model: &str, state: Value, ids: &[&str]) -> SystemOneRequest {
-        let question = Question::noul("Is it?".to_owned(), None, None);
+        let question = Question::noul("Is it?".to_owned(), Default::default());
         SystemOneRequest {
             model: model.to_owned(),
             state,
@@ -73,7 +70,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::empty_model("", json!("text"), &["id"], "model: must not be empty")]
     #[case::number("m", json!(1), &["id"], "state: must be a string, object or array")]
     #[case::null("m", Value::Null, &["id"], "state: must be a string, object or array")]
     #[case::no_questions("m", json!("text"), &[], "questions: needs at least 1 question")]

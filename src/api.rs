@@ -27,12 +27,11 @@ pub enum Question {
 
 impl Question {
     /// A `noul` question. `criteria` is left out if neither side is described.
-    pub fn noul(instructions: String, if_true: Option<String>, if_false: Option<String>) -> Self {
-        let criteria =
-            (if_true.is_some() || if_false.is_some()).then_some(NoulCriteria { if_true, if_false });
+    pub fn noul(instructions: String, criteria: NoulCriteria) -> Self {
+        let described = criteria.if_true.is_some() || criteria.if_false.is_some();
         Question::Noul {
             instructions,
-            criteria,
+            criteria: described.then_some(criteria),
         }
     }
 
@@ -46,7 +45,7 @@ impl Question {
 }
 
 /// What counts as a yes and a no for a `noul` question.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct NoulCriteria {
     #[serde(rename = "true", skip_serializing_if = "Option::is_none")]
     pub if_true: Option<String>,
@@ -100,4 +99,34 @@ pub(crate) struct ValidationBody {
 pub(crate) struct ValidationEntry {
     pub loc: Vec<Value>,
     pub msg: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::json;
+
+    use super::*;
+
+    /// `noul` criteria hold only `true` and/or `false` keys, and are left out
+    /// when neither is described. See `docs/api-client.md`.
+    #[rstest]
+    #[case::neither(None, None, json!({"type": "noul", "instructions": "Is it?"}))]
+    #[case::only_true(Some("Yes"), None, json!({"type": "noul", "instructions": "Is it?", "criteria": {"true": "Yes"}}))]
+    #[case::only_false(None, Some("No"), json!({"type": "noul", "instructions": "Is it?", "criteria": {"false": "No"}}))]
+    #[case::both(Some("Yes"), Some("No"), json!({"type": "noul", "instructions": "Is it?", "criteria": {"true": "Yes", "false": "No"}}))]
+    fn noul_criteria_have_only_true_and_false_keys(
+        #[case] if_true: Option<&str>,
+        #[case] if_false: Option<&str>,
+        #[case] expected: Value,
+    ) {
+        let question = Question::noul(
+            "Is it?".to_owned(),
+            NoulCriteria {
+                if_true: if_true.map(str::to_owned),
+                if_false: if_false.map(str::to_owned),
+            },
+        );
+        assert_eq!(serde_json::to_value(&question).unwrap(), expected);
+    }
 }

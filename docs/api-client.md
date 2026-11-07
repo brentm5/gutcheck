@@ -22,13 +22,13 @@ These run before any request is sent. Limits come from TypeSafe's [OpenAPI spec]
 
 ### Request
 
-| Check        | Rule                                                        |
-| ------------ | ----------------------------------------------------------- |
-| `model`      | Present (filled in from config if the caller didn't set it) |
-| `state`      | Present. A string, object or array, which may be empty      |
-| `questions`  | An object with at least one entry                           |
-| Question IDs | Non-empty strings                                           |
-| Body size    | At most 32 MiB once encoded                                 |
+| Check        | Rule                                                                                                                               |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `model`      | Present (filled in from config if the caller didn't set it or left it blank; see [`configuration.md`](configuration.md#overrides)) |
+| `state`      | Present. A string, object or array, which may be empty                                                                             |
+| `questions`  | An object with at least one entry                                                                                                  |
+| Question IDs | Non-empty strings                                                                                                                  |
+| Body size    | At most 32 MiB once encoded                                                                                                        |
 
 ### Questions
 

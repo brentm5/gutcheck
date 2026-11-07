@@ -5,9 +5,9 @@ mod cli;
 mod output;
 
 use cli::{AskCommand, AuthCommand, Cli, Command};
+use gutcheck::api::{Answer, NoulCriteria, Question};
 use gutcheck::{
-    Answer, Client, Error, MAX_BODY_BYTES, Overrides, Question, Settings, api_key_from_env,
-    check_body_size,
+    Client, Error, MAX_BODY_BYTES, Overrides, Settings, api_key_from_env, check_body_size,
 };
 use tokio::io::AsyncReadExt;
 
@@ -43,12 +43,12 @@ async fn cli_main() -> ExitCode {
         usage_rs::embedded::Outcome::Parsed(cli) => cli,
         usage_rs::embedded::Outcome::Exit(exit) => {
             let result = if exit.stderr {
-                io::stderr().write_all(exit.text.as_bytes())
+                write_output(io::stderr(), &exit.text)
             } else {
-                io::stdout().write_all(exit.text.as_bytes())
+                write_output(io::stdout(), &exit.text)
             };
             if let Err(error) = result {
-                eprintln!("error: could not write the output: {error}");
+                eprintln!("error: {error}");
                 return ExitCode::FAILURE;
             }
             // The parser's default usage-error status is 2; gutcheck uses 1 for every error.
@@ -91,18 +91,21 @@ async fn run(cli: Cli) -> Result<(), Error> {
             // The timeout covers the whole command, so it includes waiting on stdin.
             let deadline = client.deadline();
             let state = client.within(deadline, read_state(args.state)).await?;
-            let question = Question::noul(args.question, args.if_true, args.if_false);
+            let criteria = NoulCriteria {
+                if_true: args.if_true,
+                if_false: args.if_false,
+            };
+            let question = Question::noul(args.question, criteria);
             let answer = client
                 .ask_question(state.into(), question, deadline)
-                .await
-                .map_err(point_to_auth_validate)?;
+                .await?;
             let output = if args.json {
                 answer_json(&answer)?
             } else if args.boolean {
                 let threshold = args
                     .threshold
                     .expect("--boolean supplies a threshold through default_if");
-                noul_text(&answer, threshold.0)
+                boolean_text(&answer, threshold.0)
             } else {
                 output::number_text(answer.probability())
             };
@@ -141,24 +144,12 @@ async fn read_state(flag: Option<String>) -> Result<String, Error> {
     }
 }
 
-/// Adds the pointer to `gutcheck auth validate` to a rejected key. Every command
-/// but `auth validate` itself uses it. See `docs/api-client.md`.
-fn point_to_auth_validate(error: Error) -> Error {
-    match error {
-        Error::Rejected { message, details } if details.status == 401 => Error::Rejected {
-            message: format!("{message}; check it with `gutcheck auth validate`"),
-            details,
-        },
-        other => other,
-    }
-}
-
 fn no_state() -> Error {
     Error::Usage("no state given: pass --state or pipe it to stdin".to_owned())
 }
 
 /// `true` if the unrounded probability exceeds `threshold`, otherwise `false`.
-fn noul_text(answer: &Answer, threshold: f64) -> String {
+fn boolean_text(answer: &Answer, threshold: f64) -> String {
     (answer.probability() > threshold).to_string()
 }
 
@@ -168,7 +159,12 @@ fn answer_json(answer: &Answer) -> Result<String, Error> {
 }
 
 fn print_line(line: &str) -> Result<(), Error> {
-    writeln!(io::stdout(), "{line}")
+    write_output(io::stdout(), &format!("{line}\n"))
+}
+
+fn write_output(mut stream: impl Write, text: &str) -> Result<(), Error> {
+    stream
+        .write_all(text.as_bytes())
         .map_err(|e| Error::Output(format!("could not write the output: {e}")))
 }
 
@@ -192,7 +188,7 @@ mod tests {
     #[case::zero_at_zero_cutoff(0.0, 0.0, "false")]
     #[case::one_at_one_cutoff(1.0, 1.0, "false")]
     #[case::top_cutoff_needs_certainty(0.999, 1.0, "false")]
-    fn noul_text_compares_with_the_cutoff(
+    fn boolean_text_compares_with_the_cutoff(
         #[case] probability: f64,
         #[case] threshold: f64,
         #[case] expected: &str,
@@ -201,7 +197,7 @@ mod tests {
             noul: serde_json::Number::from_f64(probability).unwrap(),
             extra: serde_json::Map::new(),
         };
-        assert_eq!(noul_text(&answer, threshold), expected);
+        assert_eq!(boolean_text(&answer, threshold), expected);
     }
 
     #[test]

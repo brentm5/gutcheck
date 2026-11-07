@@ -89,7 +89,7 @@ impl Client {
         let http = reqwest::Client::builder()
             .redirect(Policy::none())
             .build()
-            .map_err(|e| Error::Usage(format!("could not start the HTTP client: {e}")))?;
+            .map_err(|e| Error::Internal(format!("could not start the HTTP client: {e}")))?;
 
         Ok(Self {
             http,
@@ -156,7 +156,7 @@ impl Client {
         check_request(&request)?;
         // `Bytes` makes each retry's copy of the body a reference count bump.
         let body: Bytes = serde_json::to_vec(&request)
-            .map_err(|e| Error::Usage(format!("could not encode the request: {e}")))?
+            .map_err(|e| Error::Internal(format!("could not encode the request: {e}")))?
             .into();
         check_body_size(body.len())?;
         // The body holds everything now, so don't keep a second copy of the state.
@@ -170,7 +170,8 @@ impl Client {
                     .header(CONTENT_TYPE, "application/json")
                     .body(body.clone())
             })
-            .await?;
+            .await
+            .map_err(point_to_auth_validate)?;
         take_answer(response, id)
     }
 
@@ -243,7 +244,7 @@ async fn error_from_response(response: Response) -> Error {
         }
     } else {
         Error::Rejected {
-            message: rejection_message(code, &details.body),
+            message: rejection_message(status, &details.body),
             details,
         }
     }
@@ -251,16 +252,35 @@ async fn error_from_response(response: Response) -> Error {
 
 /// The one-line message for a status that isn't retried. See the table in
 /// `docs/api-client.md`.
-fn rejection_message(code: u16, body: &str) -> String {
-    let message = match code {
-        400 => bad_request_message(body),
-        401 => Some("invalid or missing API key".to_owned()),
-        413 => Some(BODY_TOO_LARGE.to_owned()),
-        415 => Some("internal error: the API rejected the request encoding".to_owned()),
-        422 => validation_message(body),
+fn rejection_message(status: StatusCode, body: &str) -> String {
+    let message = match status {
+        StatusCode::BAD_REQUEST => bad_request_message(body),
+        StatusCode::UNAUTHORIZED => Some("invalid or missing API key".to_owned()),
+        StatusCode::PAYLOAD_TOO_LARGE => Some(BODY_TOO_LARGE.to_owned()),
+        StatusCode::UNSUPPORTED_MEDIA_TYPE => {
+            Some("internal error: the API rejected the request encoding".to_owned())
+        }
+        StatusCode::UNPROCESSABLE_ENTITY => validation_message(body),
         _ => None,
     };
-    message.unwrap_or_else(|| format!("unexpected API response (HTTP {code})"))
+    message.unwrap_or_else(|| format!("unexpected API response (HTTP {})", status.as_u16()))
+}
+
+/// Adds the pointer to `gutcheck auth validate` to a rejected key. Every request
+/// but `auth validate` itself uses it, so every front end gets the same message.
+/// See `docs/api-client.md`.
+fn point_to_auth_validate(error: Error) -> Error {
+    match error {
+        Error::Rejected { message, details }
+            if details.status == StatusCode::UNAUTHORIZED.as_u16() =>
+        {
+            Error::Rejected {
+                message: format!("{message}; check it with `gutcheck auth validate`"),
+                details,
+            }
+        }
+        other => other,
+    }
 }
 
 /// `detail` from a `400` body, which is a string or an object. An empty one says
@@ -392,6 +412,10 @@ mod tests {
         Backoff::default().delay(attempt, retry_after, random)
     }
 
+    fn message_for(code: u16, body: &str) -> String {
+        rejection_message(StatusCode::from_u16(code).unwrap(), body)
+    }
+
     #[test]
     fn validation_entries_drop_body_and_join_on_one_line() {
         let body = r#"{"detail":[
@@ -400,7 +424,7 @@ mod tests {
             {"loc":[],"msg":"Bad","type":"bad"}
         ]}"#;
         assert_eq!(
-            rejection_message(422, body),
+            message_for(422, body),
             "questions.noul.criteria: Field required; items.2: Too long; Bad"
         );
     }
@@ -408,11 +432,11 @@ mod tests {
     #[test]
     fn bad_request_reports_string_and_object_details() {
         assert_eq!(
-            rejection_message(400, r#"{"detail":"max_tokens_exceeded"}"#),
+            message_for(400, r#"{"detail":"max_tokens_exceeded"}"#),
             "max_tokens_exceeded"
         );
         assert_eq!(
-            rejection_message(400, r#"{"detail":{"code":"nesting"}}"#),
+            message_for(400, r#"{"detail":{"code":"nesting"}}"#),
             r#"{"code":"nesting"}"#
         );
     }
@@ -421,12 +445,12 @@ mod tests {
     fn unreadable_error_bodies_fall_back_to_the_status() {
         for code in [400, 422] {
             assert_eq!(
-                rejection_message(code, "<html>"),
+                message_for(code, "<html>"),
                 format!("unexpected API response (HTTP {code})")
             );
         }
         assert_eq!(
-            rejection_message(422, r#"{"detail":[]}"#),
+            message_for(422, r#"{"detail":[]}"#),
             "unexpected API response (HTTP 422)"
         );
     }
@@ -439,7 +463,7 @@ mod tests {
     #[case::blank_message(422, r#"{"detail":[{"loc":[],"msg":"  "}]}"#)]
     fn empty_error_details_fall_back_to_the_status(#[case] code: u16, #[case] body: &str) {
         assert_eq!(
-            rejection_message(code, body),
+            message_for(code, body),
             format!("unexpected API response (HTTP {code})")
         );
     }
@@ -447,7 +471,7 @@ mod tests {
     #[test]
     fn empty_validation_messages_are_left_out() {
         let body = r#"{"detail":[{"loc":["body","a"],"msg":""},{"loc":["body","b"],"msg":"Bad"}]}"#;
-        assert_eq!(rejection_message(422, body), "b: Bad");
+        assert_eq!(message_for(422, body), "b: Bad");
     }
 
     #[test]

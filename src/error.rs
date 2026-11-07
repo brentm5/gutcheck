@@ -38,6 +38,10 @@ pub enum Error {
     /// The answer arrived but couldn't be printed.
     #[error("{0}")]
     Output(String),
+
+    /// A failure inside `gutcheck` itself, not caused by the input or the API.
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 impl Error {
@@ -46,7 +50,7 @@ impl Error {
         match self {
             Error::Rejected { details, .. } => Some(details),
             Error::Temporary { details, .. } => details.as_ref(),
-            Error::Usage(_) | Error::Timeout(_) | Error::Output(_) => None,
+            Error::Usage(_) | Error::Timeout(_) | Error::Output(_) | Error::Internal(_) => None,
         }
     }
 }

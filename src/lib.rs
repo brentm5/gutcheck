@@ -9,7 +9,6 @@ pub mod client;
 pub mod config;
 pub mod error;
 
-pub use api::{Answer, Question};
 pub use checks::{MAX_BODY_BYTES, check_body_size};
 pub use client::{Client, api_key_from_env};
 pub use config::{Overrides, Settings, parse_duration};

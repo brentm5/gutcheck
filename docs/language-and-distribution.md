@@ -83,7 +83,7 @@ Why not generate the types: the spec is OpenAPI 3.1, which the main Rust generat
 
 ### Errors and exit codes
 
-One error enum (with `thiserror`) whose variants match the categories in [`api-client.md`](api-client.md): usage/validation, API rejection, temporary failure, timeout, plus one for an answer that couldn't be printed. For now every variant exits with code 1 ([`output-and-exit-codes.md`](output-and-exit-codes.md)), but keeping the categories makes distinct exit codes easy to add later. `main` handles the exit code and the stderr message in one place. Library code never calls `process::exit`.
+One error enum (with `thiserror`) whose variants match the categories in [`api-client.md`](api-client.md): usage/validation, API rejection, temporary failure, timeout, plus one for an answer that couldn't be printed and one for internal failures that are neither the input's nor the API's fault (such as failing to encode a request). For now every variant exits with code 1 ([`output-and-exit-codes.md`](output-and-exit-codes.md)), but keeping the categories makes distinct exit codes easy to add later. `main` handles the exit code and the stderr message in one place. Library code never calls `process::exit`.
 
 ### Shared core, thin front ends
 
@@ -101,7 +101,7 @@ Command handlers only parse input and format output. Validation, HTTP, retries a
 
 The Rust declarations in `src/cli.rs` are the executable CLI's source of truth. `usage-rs` generates help and the `__usage_spec__` endpoint from the same metadata. Version, license, repository and the root description come from Cargo's package environment variables. The checked-in `gutcheck.usage.kdl` is generated with `mise run spec:usage`, and a test compares it with the binary's exported spec. It lists implemented commands only; future commands stay in the design docs until implemented.
 
-Use `embedded_outcome` so `main` controls the process's exit status: help, version and spec output succeed, and usage errors map to the project's error code `1`. Set `unknown_flags = "error"` and `args_override_self = false` on the relevant command declarations to retain strict parsing. CLI-specific value types implement `FromStr`; the duration wrapper reuses the core duration parser. The threshold also declares portable validation so the generated KDL reports the same constraint without exposing conversion-expression errors.
+Use `embedded_outcome` so `main` controls the process's exit status: requested help (`-h`, `--help`, `help`), `--version` and spec output print to stdout and exit `0`, and usage errors map to the project's error code `1`. A missing command, such as `gutcheck` or `gutcheck ask` on its own, is a usage error: it prints help to stderr and exits `1`, so a script with an incomplete command fails instead of succeeding silently. Set `unknown_flags = "error"` and `args_override_self = false` on the relevant command declarations to retain strict parsing. CLI-specific value types implement `FromStr`; the duration wrapper reuses the core duration parser. The threshold also declares portable validation so the generated KDL reports the same constraint without exposing conversion-expression errors.
 
 ### Plain numeric formatting
 
