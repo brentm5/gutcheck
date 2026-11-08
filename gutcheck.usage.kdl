@@ -53,6 +53,30 @@ The first = separates the key from its description, and later = characters belon
         output plain help="The chosen option key" default=#true
         output json media_type="application/json" framing=json help="The full API answer object" select=--json
     }
+    cmd score help="Place the input on an ordered rubric" args_override_self=#false {
+        flag --state help="Input text; takes precedence over stdin and leaves it unread" {
+            long_help #"""
+Input text; takes precedence over stdin and leaves it unread
+
+Without --state, read nonterminal stdin as UTF-8 text until EOF, preserving trailing newlines. Waiting for stdin counts toward --timeout. An explicit empty string supplies a state; empty stdin does not.
+"""#
+            arg <TEXT>
+        }
+        flag "-l --level" help="A rubric level description, lowest first (repeat for 1-10 levels)" required=#true var=#true var_max=10 {
+            long_help #"""
+A rubric level description, lowest first (repeat for 1-10 levels)
+
+Flag order defines the rubric: the first level scores 0, the second 1, and so on. Numbers inside a description do not change its position. The score is the probability-weighted average of the positions and may fall between levels.
+"""#
+            arg <DESCRIPTION>
+        }
+        flag --json help="Print the full answer object as one line of JSON, without display rounding"
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <QUESTION> help="The question that rates the input"
+        example "gutcheck ask score \"How frustrated is the customer?\" -l Calm -l Annoyed -l Angry --state \"This is the third time I've asked. Fix it.\"" header="Rate against an ordered rubric"
+        output plain help="Probability-weighted score as an ordinary decimal, rounded to at most three decimal places, with trailing zeros removed" default=#true
+        output json media_type="application/json" framing=json help="The full API answer object, without display rounding" select=--json
+    }
     cmd noul help="Estimate the probability that a statement is true" args_override_self=#false {
         flag --state help="Input text; takes precedence over stdin and leaves it unread" {
             long_help #"""

@@ -69,7 +69,7 @@ The types:
 
 - Questions are an enum tagged on `type` (`choice`, `score`, `noul`) with an extra variant that keeps unknown types as raw JSON, so `ask_jev` can pass them through ([`api-client.md`](api-client.md)).
 - Answers follow the same pattern.
-- Only `choice` and `noul` exist so far. `score` and the unknown-type variant arrive with the commands that need them.
+- `choice`, `score` and `noul` exist. The unknown-type variant arrives with `ask_jev`, which needs it.
 - Error bodies get their own types for `400` (`detail`) and `422` (`detail[]` with `loc`, `msg`).
 
 Validating against the spec:
@@ -105,7 +105,7 @@ Use `embedded_outcome` so `main` controls the process's exit status: requested h
 
 ### Plain numeric formatting
 
-The shared CLI formatter in `src/output.rs` uses the single `PLAIN_DECIMAL_PLACES` constant, currently `3`, for both probabilities and future score output. It emits ordinary decimals and trims fractional zeros. Threshold comparisons use the original value, and JSON output bypasses display rounding.
+The shared CLI formatter in `src/output.rs` uses the single `PLAIN_DECIMAL_PLACES` constant, currently `3`, for both probability and score output. It emits ordinary decimals and trims fractional zeros. Threshold comparisons use the original value, and JSON output bypasses display rounding.
 
 ### Configuration loading
 

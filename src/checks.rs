@@ -32,6 +32,9 @@ pub(crate) fn check_request(request: &SystemOneRequest) -> Result<(), Error> {
 /// The API's limit on `choice` options.
 pub const MAX_CHOICE_OPTIONS: usize = 255;
 
+/// The API's limit on `score` levels.
+pub const MAX_SCORE_LEVELS: usize = 10;
+
 fn check_question(question: &Question) -> Result<(), String> {
     match question {
         Question::Choice { criteria, .. } if criteria.is_empty() => {
@@ -40,8 +43,14 @@ fn check_question(question: &Question) -> Result<(), String> {
         Question::Choice { criteria, .. } if criteria.len() > MAX_CHOICE_OPTIONS => Err(format!(
             "choice allows at most {MAX_CHOICE_OPTIONS} options"
         )),
+        Question::Score { criteria, .. } if criteria.is_empty() => {
+            Err("score needs at least 1 level".to_owned())
+        }
+        Question::Score { criteria, .. } if criteria.len() > MAX_SCORE_LEVELS => {
+            Err(format!("score allows at most {MAX_SCORE_LEVELS} levels"))
+        }
         // `noul` criteria can only hold `true` and `false` by construction.
-        Question::Choice { .. } | Question::Noul { .. } => Ok(()),
+        Question::Choice { .. } | Question::Noul { .. } | Question::Score { .. } => Ok(()),
     }
 }
 
@@ -131,6 +140,33 @@ mod tests {
     )]
     fn rejects_choice_option_counts_out_of_range(#[case] options: usize, #[case] message: &str) {
         let error = check_request(&choice_request(options)).unwrap_err();
+        assert_eq!(error.to_string(), message);
+    }
+
+    fn score_request(levels: usize) -> SystemOneRequest {
+        let criteria = (0..levels).map(|i| format!("level {i}")).collect();
+        SystemOneRequest {
+            model: "m".to_owned(),
+            state: json!("text"),
+            questions: BTreeMap::from([(
+                "score".to_owned(),
+                Question::score("How much?".to_owned(), criteria),
+            )]),
+        }
+    }
+
+    #[rstest]
+    #[case::one(1)]
+    #[case::most(MAX_SCORE_LEVELS)]
+    fn accepts_score_level_counts_in_range(#[case] levels: usize) {
+        check_request(&score_request(levels)).unwrap();
+    }
+
+    #[rstest]
+    #[case::none(0, "questions.score: score needs at least 1 level")]
+    #[case::too_many(MAX_SCORE_LEVELS + 1, "questions.score: score allows at most 10 levels")]
+    fn rejects_score_level_counts_out_of_range(#[case] levels: usize, #[case] message: &str) {
+        let error = check_request(&score_request(levels)).unwrap_err();
         assert_eq!(error.to_string(), message);
     }
 

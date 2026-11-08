@@ -6,7 +6,7 @@
 
 The Rust declarations in [`src/cli.rs`](../src/cli.rs) define the executable CLI with [usage-rs](https://usage.jdx.dev/rust/quickstart) 7.3.0. The same declarations generate [`gutcheck.usage.kdl`](../gutcheck.usage.kdl), including flag constraints, output modes and package metadata from Cargo. Regenerate it with `mise run spec:usage`; do not edit it by hand. A test compares the checked-in spec with the executable's `__usage_spec__` output.
 
-The generated spec can produce documentation and shell completions for the implemented commands: `ask choice`, `ask noul` and `auth validate`. Planned commands in the tree below are documented here until their Rust declarations and handlers exist. Input selection, duplicate option-key checks, API validation and output formatting remain application responsibilities.
+The generated spec can produce documentation and shell completions for the implemented commands: `ask choice`, `ask noul`, `ask score` and `auth validate`. Planned commands in the tree below are documented here until their Rust declarations and handlers exist. Input selection, duplicate option-key checks, API validation and output formatting remain application responsibilities.
 
 Run `mise run lint:usage` to validate it. See [`development.md`](development.md#usage-specification) for artifact generation commands.
 
@@ -69,7 +69,7 @@ For example, `-o 'billing=Payments=refunds'` defines the key `billing` with desc
 
 #### Score levels
 
-**Decision:** `score` returns the API's probability-weighted numeric score, without snapping to a level or rescaling. Plain output uses the shared three-decimal formatting rule; `--json` retains the answer without display rounding. Repeated `-l, --level` descriptions define the rubric in order: the first level is `0`, the second is `1`, and so on. There are 1–10 levels; numeric text inside a description does not change its assigned position. `ask score` is not implemented yet.
+**Decision:** `score` returns the API's probability-weighted numeric score, without snapping to a level or rescaling. Plain output uses the shared three-decimal formatting rule; `--json` retains the answer without display rounding. Repeated `-l, --level` descriptions define the rubric in order: the first level is `0`, the second is `1`, and so on. There are 1–10 levels; numeric text inside a description does not change its assigned position.
 
 For `-l Calm -l Annoyed -l Angry`, the scale is `0` to `2`. If the model assigns probabilities of `0`, `0.2` and `0.8` to those levels, the weighted score is `1.8`. Plain output is that number; `--json` also provides the legend, probabilities and confidence. To select one named category instead, use `choice`.
 

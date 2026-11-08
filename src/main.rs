@@ -105,6 +105,18 @@ async fn run(cli: Cli) -> Result<(), Error> {
             print_line(&output)
         }
         Command::Ask(cli::AskArgs {
+            command: AskCommand::Score(args),
+        }) => {
+            let question = Question::score(args.question, args.levels);
+            let answer = ask(&settings, args.state, question).await?;
+            let output = if args.json {
+                answer_json(&answer)?
+            } else {
+                output::number_text(answer.score().ok_or_else(wrong_answer_type)?)
+            };
+            print_line(&output)
+        }
+        Command::Ask(cli::AskArgs {
             command: AskCommand::Noul(args),
         }) => {
             let criteria = NoulCriteria {
