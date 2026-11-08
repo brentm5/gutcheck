@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Installs the tools pinned in mise.toml (Rust, rumdl, Usage, jq), puts
+      # them on PATH for later steps, and caches the mise installs.
+      - uses: jdx/mise-action@v5
+
+      # Caches the cargo registry and target/. Runs after mise so it keys on
+      # the pinned Rust version.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Lint
+        run: mise run lint
+
+      # The parser conformance test in src/cli.rs runs the Usage CLI, which
+      # mise-action has put on PATH.
+      - name: Test
+        run: mise run test

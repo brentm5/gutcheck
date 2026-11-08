@@ -70,7 +70,16 @@ mise exec -- usage explain --file gutcheck.usage.kdl -- gutcheck ask noul "The m
 - MD060 (table alignment) is turned on with the `aligned` style, so `mise run fmt` pads table columns to line up.
 - Run `mise run fmt` before committing.
 
+## CI
+
+GitHub Actions runs [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) on every pull request and on pushes to `main`. One job on `ubuntu-latest`:
+
+1. [`jdx/mise-action`](https://github.com/jdx/mise-action) runs `mise install`, so CI uses the same versions as `mise.toml` with no separately pinned toolchain. This puts the Usage CLI on `PATH` for the parser conformance test.
+2. [`Swatinem/rust-cache`](https://github.com/Swatinem/rust-cache) caches the cargo registry and `target/`. `mise-action` caches the mise installs.
+3. `mise run lint`, then `mise run test`. The job fails if either fails.
+
+CI never calls the live API and needs no secrets ([`testing.md`](testing.md)).
+
 ## Deferred
 
-- **CI (GitHub Actions):** will install the pinned tools with `mise install`, then run `mise run lint` and `mise run test` on pull requests. Tests need the Usage CLI on `PATH` for parser conformance checks. The basic Rust project now exists, so this can be set up next.
 - **Release workflow:** how releases are cut (versioning, tagging, changelog, and how dist's generated workflow is triggered) is still undecided. The build targets and install channels are in [`language-and-distribution.md`](language-and-distribution.md#distribution).
