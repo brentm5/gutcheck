@@ -853,10 +853,26 @@ async fn choice_accepts_255_options_and_rejects_256() {
     "error: the argument '--state' cannot be used multiple times\n"
 )]
 #[case::unknown_flag(&["--bogus"], "error: unexpected argument '--bogus' found\n")]
-fn parser_errors_are_one_line(#[case] args: &[&str], #[case] stderr: &str) {
-    gutcheck()
+#[case::blank_line_in_a_value(
+    &["ask", "choice", "Q", "-o", "=Payments\n\nrefunds"],
+    "error: invalid value '=Payments refunds' for '--option': option key must not be empty\n"
+)]
+fn parser_errors_are_one_line(
+    #[case] args: &[&str],
+    #[case] stderr: &str,
+    #[values(false, true)] force_colour: bool,
+) {
+    let mut command = gutcheck();
+    command
         .args(args)
         .env_remove("TYPESAFE_API_KEY")
+        .env_remove("NO_COLOR");
+    if force_colour {
+        command.env("CLICOLOR_FORCE", "1");
+    } else {
+        command.env_remove("CLICOLOR_FORCE");
+    }
+    command
         .assert()
         .code(1)
         .stdout("")

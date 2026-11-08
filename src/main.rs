@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::ffi::{OsStr, OsString};
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
@@ -44,8 +45,12 @@ async fn cli_main() -> ExitCode {
         usage_rs::embedded::Outcome::Parsed(cli) => cli,
         usage_rs::embedded::Outcome::Exit(exit) => {
             let result = if exit.stderr {
-                let text = one_line_usage_error(&exit.text).unwrap_or(exit.text);
-                write_output(io::stderr(), &text)
+                let text = if exit.code == 0 {
+                    None
+                } else {
+                    usage_error_line(&argv)
+                };
+                write_output(io::stderr(), &text.unwrap_or(exit.text))
             } else {
                 write_output(io::stdout(), &exit.text)
             };
@@ -168,21 +173,61 @@ fn wrong_answer_type() -> Error {
     Error::Internal("the answer does not match the question type".to_owned())
 }
 
-/// Turns a parser error into the one-line `error: ...` message every other error
-/// uses, dropping the usage line and hints after it. A message that spans lines,
-/// such as a list of missing flags, is joined with spaces. Text that isn't an
-/// error, like the help shown when a command is missing, gives `None`.
-/// See `docs/output-and-exit-codes.md`.
-fn one_line_usage_error(text: &str) -> Option<String> {
-    if !text.starts_with("error:") {
+/// The one-line `error: ...` message for a command line the parser rejected, or
+/// `None` when the parser's response isn't an error message, like the help shown
+/// when a command or subcommand is missing. See `docs/output-and-exit-codes.md`.
+///
+/// The parser's own rendering adds a usage line and hints after a blank line,
+/// and colours the text on a terminal. So this parses again and renders the error
+/// without colour, from words whose line breaks are spaces. Then a blank line can
+/// only end the message, never come from an argument, and the paragraph before it
+/// is the whole message. A message that lists items on their own lines, such as
+/// missing flags, is joined with spaces.
+fn usage_error_line(argv: &[OsString]) -> Option<String> {
+    let words: Vec<OsString> = argv.iter().map(|word| without_line_breaks(word)).collect();
+    let words: Vec<&OsStr> = words.iter().map(OsString::as_os_str).collect();
+    let error = Cli::parse_from(&words).err()?;
+    if matches!(
+        error,
+        usage_rs::Error::Help { .. }
+            | usage_rs::Error::HelpAll { .. }
+            | usage_rs::Error::MissingArgsHelp { .. }
+            | usage_rs::Error::MissingSubcommand
+            | usage_rs::Error::Version { .. }
+    ) {
         return None;
     }
-    let message: Vec<&str> = text
+    let rendered = usage_rs::render_failure_plain(Cli::spec(), &words, &error);
+    let message: Vec<&str> = rendered
         .lines()
         .take_while(|line| !line.trim().is_empty())
         .map(str::trim)
         .collect();
     Some(format!("{}\n", message.join(" ")))
+}
+
+/// `word` with each run of line breaks replaced by one space. A word without
+/// any is returned as is, so non-UTF-8 words parse exactly as before.
+fn without_line_breaks(word: &OsStr) -> OsString {
+    let is_break = |c: char| c == '\n' || c == '\r';
+    let text = word.to_string_lossy();
+    if !text.contains(is_break) {
+        return word.to_owned();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut in_break = false;
+    for c in text.chars() {
+        if is_break(c) {
+            if !in_break {
+                out.push(' ');
+            }
+            in_break = true;
+        } else {
+            out.push(c);
+            in_break = false;
+        }
+    }
+    out.into()
 }
 
 /// Picks the state from `--state` or stdin. See `docs/cli-interface.md`.
@@ -263,16 +308,31 @@ mod tests {
 
     #[rstest]
     #[case::hint_dropped(
-        "error: invalid value '=x' for '--option': option key must not be empty\n\nFor more information, try '--help'.\n",
+        &["ask", "choice", "Q", "-o", "=x"],
         Some("error: invalid value '=x' for '--option': option key must not be empty\n")
     )]
     #[case::list_joined(
-        "error: the following required arguments were not provided:\n  --option\n\nUsage: gutcheck ask choice <FLAGS> <QUESTION>\n",
+        &["ask", "choice", "Q"],
         Some("error: the following required arguments were not provided: --option\n")
     )]
-    #[case::help_kept("Ask Jev a question\n\nUsage: gutcheck ask <SUBCOMMAND>\n", None)]
-    fn usage_errors_become_one_line(#[case] text: &str, #[case] expected: Option<&str>) {
-        assert_eq!(one_line_usage_error(text).as_deref(), expected);
+    #[case::blank_line_in_a_value(
+        &["ask", "choice", "Q", "-o", "=a\n\nb"],
+        Some("error: invalid value '=a b' for '--option': option key must not be empty\n")
+    )]
+    #[case::missing_command_help(&["ask"], None)]
+    #[case::requested_help(&["ask", "choice", "--help"], None)]
+    #[case::valid(&["ask", "choice", "Q", "-o", "a"], None)]
+    fn usage_errors_become_one_line(#[case] args: &[&str], #[case] expected: Option<&str>) {
+        let argv: Vec<OsString> = args.iter().map(OsString::from).collect();
+        assert_eq!(usage_error_line(&argv).as_deref(), expected);
+    }
+
+    #[rstest]
+    #[case::unchanged("plain text", "plain text")]
+    #[case::newline("a\nb", "a b")]
+    #[case::crlf_run("a\r\n\r\nb", "a b")]
+    fn line_breaks_become_one_space(#[case] word: &str, #[case] expected: &str) {
+        assert_eq!(without_line_breaks(OsStr::new(word)), OsStr::new(expected));
     }
 
     #[test]
