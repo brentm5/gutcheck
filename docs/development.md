@@ -80,6 +80,8 @@ GitHub Actions runs [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) on
 
 CI never calls the live API and needs no secrets ([`testing.md`](testing.md)).
 
+Workflows pin every action to an exact commit SHA, never a tag, with the version in a trailing comment (for example `actions/checkout@<sha> # v7.0.1`).
+
 ## Deferred
 
 - **Release workflow:** how releases are cut (versioning, tagging, changelog, and how dist's generated workflow is triggered) is still undecided. The build targets and install channels are in [`language-and-distribution.md`](language-and-distribution.md#distribution).
