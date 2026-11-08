@@ -4,7 +4,9 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use gutcheck::api::{NoulCriteria, Question, SystemOneRequest, SystemOneResponse};
+use gutcheck::api::{
+    Answer, ChoiceCriteria, NoulCriteria, Question, SystemOneRequest, SystemOneResponse,
+};
 use jsonschema::Validator;
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -56,13 +58,39 @@ fn noul_requests_match_the_spec(#[case] if_true: Option<&str>, #[case] if_false:
     assert_valid("SystemOneRequest", &serde_json::to_value(&request).unwrap());
 }
 
-#[test]
-fn response_fixture_matches_the_spec_and_our_types() {
-    let body = include_str!("fixtures/noul_success.json");
+#[rstest]
+#[case::bare_keys(&[("billing", None), ("platform", None)])]
+#[case::described_keys(&[("billing", Some("Payments")), ("platform", Some("Infra"))])]
+#[case::mixed(&[("billing", None), ("platform", Some("Infra=outages"))])]
+fn choice_requests_match_the_spec(#[case] options: &[(&str, Option<&str>)]) {
+    let criteria = options
+        .iter()
+        .map(|(key, description)| ((*key).to_owned(), description.map(str::to_owned)))
+        .collect();
+    let request = SystemOneRequest {
+        model: "jev-latest".to_owned(),
+        state: json!("text"),
+        questions: BTreeMap::from([(
+            "choice".to_owned(),
+            Question::choice("Which team?".to_owned(), ChoiceCriteria(criteria)),
+        )]),
+    };
 
+    assert_valid("SystemOneRequest", &serde_json::to_value(&request).unwrap());
+}
+
+#[rstest]
+#[case::noul(include_str!("fixtures/noul_success.json"), "noul")]
+#[case::choice(include_str!("fixtures/choice_success.json"), "choice")]
+fn response_fixtures_match_the_spec_and_our_types(#[case] body: &str, #[case] id: &str) {
     assert_valid("SystemOneResponse", &serde_json::from_str(body).unwrap());
     let response: SystemOneResponse = serde_json::from_str(body).unwrap();
-    assert!(response.answers.contains_key("noul"));
+    let answer = &response.answers[id];
+    let expected_type = match answer {
+        Answer::Choice { .. } => "choice",
+        Answer::Noul { .. } => "noul",
+    };
+    assert_eq!(expected_type, id);
 }
 
 #[rstest]

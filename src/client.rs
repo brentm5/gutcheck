@@ -337,11 +337,13 @@ fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Pulls the answer for question `id` out of a successful response.
+/// Pulls the answer for question `id` out of a successful response. The CLI
+/// uses the question type as its ID, so the answer must have that type too.
 fn take_answer(details: HttpDetails, id: &str) -> Result<Answer, Error> {
     let answer = serde_json::from_str::<SystemOneResponse>(&details.body)
         .ok()
-        .and_then(|mut response| response.answers.remove(id));
+        .and_then(|mut response| response.answers.remove(id))
+        .filter(|answer| answer.kind() == id);
     answer.ok_or_else(|| Error::Rejected {
         message: "unexpected API response: it has no usable answer".to_owned(),
         details,

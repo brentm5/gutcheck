@@ -6,7 +6,7 @@
 
 The Rust declarations in [`src/cli.rs`](../src/cli.rs) define the executable CLI with [usage-rs](https://usage.jdx.dev/rust/quickstart) 7.3.0. The same declarations generate [`gutcheck.usage.kdl`](../gutcheck.usage.kdl), including flag constraints, output modes and package metadata from Cargo. Regenerate it with `mise run spec:usage`; do not edit it by hand. A test compares the checked-in spec with the executable's `__usage_spec__` output.
 
-The generated spec can produce documentation and shell completions for the implemented commands: `ask noul` and `auth validate`. Planned commands in the tree below are documented here until their Rust declarations and handlers exist. Input selection, duplicate option-key checks, API validation and output formatting remain application responsibilities.
+The generated spec can produce documentation and shell completions for the implemented commands: `ask choice`, `ask noul` and `auth validate`. Planned commands in the tree below are documented here until their Rust declarations and handlers exist. Input selection, duplicate option-key checks, API validation and output formatting remain application responsibilities.
 
 Run `mise run lint:usage` to validate it. See [`development.md`](development.md#usage-specification) for artifact generation commands.
 
@@ -55,7 +55,7 @@ Output format and exit codes are covered in [`output-and-exit-codes.md`](output-
 
 #### Choice options
 
-**Decision:** descriptions are optional. `-o billing` asks Jev to interpret the option by its name alone; `-o billing="Payments and refunds"` adds a description. Both forms return `billing` if that option is selected, and they may be mixed in one command. `ask choice` is not implemented yet.
+**Decision:** descriptions are optional. `-o billing` asks Jev to interpret the option by its name alone; `-o billing="Payments and refunds"` adds a description. Both forms return `billing` if that option is selected, and they may be mixed in one command. In the request, a bare key has a `null` description, which the API interprets by the key alone.
 
 **Parsing decision:** split an option at its first `=`. Everything after that separator belongs to the description, including additional `=` characters. With no separator, the entire value is the option key. Empty keys and duplicate keys are CLI usage errors, including a duplicate supplied once as a bare key and once with a description; an earlier definition is never silently replaced.
 

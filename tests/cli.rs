@@ -8,7 +8,7 @@ use predicates::prelude::*;
 use rstest::rstest;
 use serde_json::json;
 use tempfile::NamedTempFile;
-use wiremock::matchers::{body_partial_json, header, method, path};
+use wiremock::matchers::{body_partial_json, body_string, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn gutcheck() -> Command {
@@ -680,6 +680,240 @@ async fn noul_rounding_only_affects_plain_numeric_output(
         .assert()
         .success()
         .stdout(expected.to_owned());
+}
+
+const CHOICE_SUCCESS: &str = include_str!("fixtures/choice_success.json");
+
+fn ask_choice(config: &NamedTempFile) -> Command {
+    let mut command = gutcheck();
+    command
+        .args(["ask", "choice", "Which team?", "--config"])
+        .arg(config.path())
+        .env("TYPESAFE_API_KEY", "test-key");
+    command
+}
+
+/// Bare keys are sent as `null`, descriptions as strings, in flag order.
+#[rstest]
+#[case::bare_keys(
+    &["-o", "billing", "-o", "platform", "-o", "other"],
+    r#"{"billing":null,"platform":null,"other":null}"#
+)]
+#[case::described_keys(
+    &["-o", "billing=Payments, invoices", "--option", "platform=Infra, outages"],
+    r#"{"billing":"Payments, invoices","platform":"Infra, outages"}"#
+)]
+#[case::mixed(
+    &["-o", "platform=Infra", "-o", "billing", "-o", "other=Anything else"],
+    r#"{"platform":"Infra","billing":null,"other":"Anything else"}"#
+)]
+#[case::split_at_the_first_equals(&["-o", "billing=Payments=refunds"], r#"{"billing":"Payments=refunds"}"#)]
+#[case::empty_description(&["-o", "billing="], r#"{"billing":""}"#)]
+#[tokio::test]
+async fn choice_sends_the_options_and_prints_the_key(
+    #[case] options: &[&str],
+    #[case] criteria: &str,
+) {
+    let server = MockServer::start().await;
+    let body = format!(
+        r#"{{"model":"jev-latest","state":"the input","questions":{{"choice":{{"type":"choice","instructions":"Which team?","criteria":{criteria}}}}}}}"#
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .and(body_string(body))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CHOICE_SUCCESS))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    ask_choice(&config_for(&server))
+        .args(["--state", "the input"])
+        .args(options)
+        .assert()
+        .success()
+        .stdout("platform\n")
+        .stderr("");
+}
+
+#[tokio::test]
+async fn choice_reads_state_from_stdin() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .and(body_partial_json(json!({"state": "piped input\n"})))
+        .respond_with(ResponseTemplate::new(200).set_body_string(CHOICE_SUCCESS))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    ask_choice(&config_for(&server))
+        .args(["-o", "billing", "-o", "platform"])
+        .write_stdin("piped input\n")
+        .assert()
+        .success()
+        .stdout("platform\n");
+}
+
+#[tokio::test]
+async fn choice_json_prints_only_the_answer_on_one_line() {
+    let server = MockServer::start().await;
+    mock_systemone(&server, 200, CHOICE_SUCCESS).await;
+
+    ask_choice(&config_for(&server))
+        .args(["--state", "text", "-o", "billing", "-o", "platform", "-o", "other", "--json"])
+        .assert()
+        .success()
+        .stdout(
+            "{\"type\":\"choice\",\"choice\":\"platform\",\"probabilities\":{\"billing\":0.04,\"platform\":0.93,\"other\":0.03},\"confidence\":0.91}\n",
+        )
+        .stderr("");
+}
+
+#[tokio::test]
+async fn choice_rejects_an_answer_of_another_type() {
+    let server = MockServer::start().await;
+    mock_systemone(
+        &server,
+        200,
+        r#"{"answers":{"choice":{"type":"noul","noul":0.5}}}"#,
+    )
+    .await;
+
+    ask_choice(&config_for(&server))
+        .args(["--state", "text", "-o", "billing"])
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr("error: unexpected API response: it has no usable answer\n");
+}
+
+#[rstest]
+#[case::no_options(&[], "--option")]
+#[case::empty_key(&["-o", ""], "option key must not be empty")]
+#[case::empty_key_with_description(&["-o", "=Payments"], "option key must not be empty")]
+#[case::duplicate_bare(&["-o", "billing", "-o", "billing"], "duplicate option key \"billing\"")]
+#[case::duplicate_described(&["-o", "billing=A", "-o", "billing=B"], "duplicate option key \"billing\"")]
+#[case::duplicate_across_forms(&["-o", "billing", "-o", "billing=Payments"], "duplicate option key \"billing\"")]
+#[case::repeated_state(&["-o", "a", "--state", "second"], "multiple times")]
+#[case::repeated_json(&["-o", "a", "--json", "--json"], "multiple times")]
+#[case::noul_flag(&["-o", "a", "--boolean"], "--boolean")]
+#[tokio::test]
+async fn choice_option_errors_exit_1_without_a_request(
+    #[case] flags: &[&str],
+    #[case] stderr_contains: &str,
+) {
+    let server = MockServer::start().await;
+    expect_no_requests(&server).await;
+
+    ask_choice(&config_for(&server))
+        .args(["--state", "text"])
+        .args(flags)
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(predicate::str::contains(stderr_contains));
+}
+
+#[tokio::test]
+async fn choice_accepts_255_options_and_rejects_256() {
+    let server = MockServer::start().await;
+    mock_systemone(&server, 200, CHOICE_SUCCESS).await;
+    let options = |count: usize| -> Vec<String> {
+        (0..count)
+            .flat_map(|i| ["-o".to_owned(), format!("k{i}")])
+            .collect()
+    };
+
+    ask_choice(&config_for(&server))
+        .args(["--state", "text"])
+        .args(options(255))
+        .assert()
+        .success();
+    ask_choice(&config_for(&server))
+        .args(["--state", "text"])
+        .args(options(256))
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(predicate::str::contains("255"));
+}
+
+/// Parser errors are one line on stderr, like every other error.
+#[rstest]
+#[case::empty_key(
+    &["ask", "choice", "Q", "-o", "=Payments"],
+    "error: invalid value '=Payments' for '--option': option key must not be empty\n"
+)]
+#[case::missing_option(
+    &["ask", "choice", "Q"],
+    "error: the following required arguments were not provided: --option\n"
+)]
+#[case::repeated_flag(
+    &["ask", "noul", "Q", "--state", "a", "--state", "b"],
+    "error: the argument '--state' cannot be used multiple times\n"
+)]
+#[case::unknown_flag(&["--bogus"], "error: unexpected argument '--bogus' found\n")]
+#[case::similar_flag(
+    &["ask", "noul", "Q", "--stat", "x"],
+    "error: unexpected argument '--stat' found tip: a similar argument exists: '--state'\n"
+)]
+#[case::blank_line_in_a_value(
+    &["ask", "choice", "Q", "-o", "=Payments\n\nrefunds"],
+    "error: invalid value '=Payments refunds' for '--option': option key must not be empty\n"
+)]
+fn parser_errors_are_one_line(
+    #[case] args: &[&str],
+    #[case] stderr: &str,
+    #[values(false, true)] force_colour: bool,
+) {
+    assert_parser_error(args, stderr, force_colour);
+}
+
+/// A word that isn't UTF-8 is reported with the bytes replaced, still on one
+/// line, and the line break after them becomes a space.
+#[cfg(unix)]
+#[rstest]
+fn non_utf8_parser_errors_are_one_line(#[values(false, true)] force_colour: bool) {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    assert_parser_error(
+        &[
+            OsStr::new("ask"),
+            OsStr::new("noul"),
+            OsStr::from_bytes(b"\xff\n"),
+        ],
+        "error: invalid value '\u{FFFD} ' for '<QUESTION>': \
+         invalid utf-8 sequence of 1 bytes from index 0\n",
+        force_colour,
+    );
+}
+
+fn assert_parser_error(args: &[impl AsRef<std::ffi::OsStr>], stderr: &str, force_colour: bool) {
+    let mut command = gutcheck();
+    command
+        .args(args)
+        .env_remove("TYPESAFE_API_KEY")
+        .env_remove("NO_COLOR");
+    if force_colour {
+        command.env("CLICOLOR_FORCE", "1");
+    } else {
+        command.env_remove("CLICOLOR_FORCE");
+    }
+    command
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(stderr.to_owned());
+}
+
+#[test]
+fn choice_help_goes_to_stdout() {
+    gutcheck()
+        .args(["ask", "choice", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--option"));
 }
 
 #[tokio::test]

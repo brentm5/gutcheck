@@ -72,8 +72,89 @@ pub(crate) struct AuthArgs {
 
 #[derive(Debug, Subcommands)]
 pub(crate) enum AskCommand {
+    /// Pick one option from a list
+    Choice(ChoiceArgs),
     /// Estimate the probability that a statement is true
     Noul(NoulArgs),
+}
+
+#[derive(Debug, Args)]
+#[usage(
+    args_override_self = false,
+    output("plain", default, help = "The chosen option key"),
+    output(
+        "json",
+        select = "--json",
+        media_type = "application/json",
+        framing = "json",
+        help = "The full API answer object"
+    ),
+    example(
+        "gutcheck ask choice \"Which team owns this?\" -o billing -o platform -o other --state \"Payment page throws 500\"",
+        header = "Pick an option by name"
+    ),
+    example(
+        "gutcheck ask choice \"Which team should handle this?\" -o billing=\"Payments, invoices, refunds\" -o platform=\"Infra, outages, server errors\" -o other=\"Anything else\" --state \"Payment page throws 500\"",
+        header = "Describe the options"
+    )
+)]
+pub(crate) struct ChoiceArgs {
+    /// The question that picks between the options
+    pub question: String,
+
+    /// Input text; takes precedence over stdin and leaves it unread
+    ///
+    /// Without --state, read nonterminal stdin as UTF-8 text until EOF, preserving
+    /// trailing newlines. Waiting for stdin counts toward --timeout. An explicit
+    /// empty string supplies a state; empty stdin does not.
+    #[usage(long, value_name = "TEXT")]
+    pub state: Option<String>,
+
+    /// An option as key or key=description (repeat for 1-255 options)
+    ///
+    /// The first = separates the key from its description, and later = characters
+    /// belong to the description. A bare key is interpreted by its name alone. The
+    /// chosen key is printed either way. Keys must be non-empty and unique.
+    #[usage(
+        short,
+        long = "option",
+        var,
+        required,
+        var_max = 255,
+        value_name = "KEY[=DESCRIPTION]",
+        validate = r#"value != "" && !(value startsWith "=")"#,
+        validate_error = "option key must not be empty"
+    )]
+    pub options: Vec<ChoiceOption>,
+
+    /// Print the full answer object as one line of JSON
+    #[usage(long)]
+    pub json: bool,
+}
+
+/// One `-o` value, split at its first `=`.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ChoiceOption {
+    pub key: String,
+    pub description: Option<String>,
+}
+
+impl FromStr for ChoiceOption {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (key, description) = match value.split_once('=') {
+            Some((key, description)) => (key, Some(description.to_owned())),
+            None => (value, None),
+        };
+        if key.is_empty() {
+            return Err("option key must not be empty");
+        }
+        Ok(Self {
+            key: key.to_owned(),
+            description,
+        })
+    }
 }
 
 #[derive(Debug, Args)]
@@ -201,6 +282,17 @@ mod tests {
     #[test]
     fn portable_spec_and_native_parser_enforce_the_same_contract() {
         let spec = Cli::to_kdl();
+        let choice_with = |count: usize| -> Vec<String> {
+            let mut args = vec!["ask".to_owned(), "choice".to_owned(), "Team?".to_owned()];
+            for i in 0..count {
+                args.extend(["-o".to_owned(), format!("k{i}")]);
+            }
+            args
+        };
+        let most_options = choice_with(255);
+        let most_options: Vec<&str> = most_options.iter().map(String::as_str).collect();
+        let too_many_options = choice_with(256);
+        let too_many_options: Vec<&str> = too_many_options.iter().map(String::as_str).collect();
         let cases: &[(&[&str], bool)] = &[
             (&["ask", "noul", "Urgent?"], true),
             (&["ask", "noul", "Urgent?", "--boolean"], true),
@@ -232,6 +324,37 @@ mod tests {
             (&["ask", "noul", "Urgent?", "--verbose", "--verbose"], false),
             (&["ask", "noul", "Urgent?", "--exit-code"], false),
             (&["ask", "choice", "Team?"], false),
+            (&["ask", "choice", "Team?", "-o", "billing"], true),
+            (
+                &[
+                    "ask",
+                    "choice",
+                    "Team?",
+                    "-o",
+                    "billing",
+                    "--option",
+                    "platform=Infra",
+                ],
+                true,
+            ),
+            (&["ask", "choice", "Team?", "-o", "billing=a=b"], true),
+            (&["ask", "choice", "Team?", "-o", "billing="], true),
+            (&["ask", "choice", "Team?", "-o", "billing", "--json"], true),
+            (&["ask", "choice", "Team?", "-o", ""], false),
+            (&["ask", "choice", "Team?", "-o", "=Payments"], false),
+            (&most_options, true),
+            (&too_many_options, false),
+            (
+                &[
+                    "ask", "choice", "Team?", "-o", "a", "--state", "x", "--state", "y",
+                ],
+                false,
+            ),
+            (
+                &["ask", "choice", "Team?", "-o", "a", "--json", "--json"],
+                false,
+            ),
+            (&["ask", "choice", "Team?", "-o", "a", "--boolean"], false),
             (&["auth", "validate"], true),
         ];
 
