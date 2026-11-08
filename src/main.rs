@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
@@ -5,7 +6,7 @@ mod cli;
 mod output;
 
 use cli::{AskCommand, AuthCommand, Cli, Command};
-use gutcheck::api::{Answer, NoulCriteria, Question};
+use gutcheck::api::{Answer, ChoiceCriteria, NoulCriteria, Question};
 use gutcheck::{
     Client, Error, MAX_BODY_BYTES, Overrides, Settings, api_key_from_env, check_body_size,
 };
@@ -85,29 +86,39 @@ async fn run(cli: Cli) -> Result<(), Error> {
 
     match cli.command {
         Command::Ask(cli::AskArgs {
+            command: AskCommand::Choice(args),
+        }) => {
+            let criteria = choice_criteria(args.options)?;
+            let question = Question::choice(args.question, criteria);
+            let answer = ask(&settings, args.state, question).await?;
+            let output = if args.json {
+                answer_json(&answer)?
+            } else {
+                answer.choice().ok_or_else(wrong_answer_type)?.to_owned()
+            };
+            print_line(&output)
+        }
+        Command::Ask(cli::AskArgs {
             command: AskCommand::Noul(args),
         }) => {
-            let client = Client::new(&settings, &api_key_from_env()?)?;
-            // The timeout covers the whole command, so it includes waiting on stdin.
-            let deadline = client.deadline();
-            let state = client.within(deadline, read_state(args.state)).await?;
             let criteria = NoulCriteria {
                 if_true: args.if_true,
                 if_false: args.if_false,
             };
             let question = Question::noul(args.question, criteria);
-            let answer = client
-                .ask_question(state.into(), question, deadline)
-                .await?;
+            let answer = ask(&settings, args.state, question).await?;
             let output = if args.json {
                 answer_json(&answer)?
-            } else if args.boolean {
-                let threshold = args
-                    .threshold
-                    .expect("--boolean supplies a threshold through default_if");
-                boolean_text(&answer, threshold.0)
             } else {
-                output::number_text(answer.probability())
+                let probability = answer.probability().ok_or_else(wrong_answer_type)?;
+                if args.boolean {
+                    let threshold = args
+                        .threshold
+                        .expect("--boolean supplies a threshold through default_if");
+                    boolean_text(probability, threshold.0)
+                } else {
+                    output::number_text(probability)
+                }
             };
             print_line(&output)
         }
@@ -118,6 +129,42 @@ async fn run(cli: Cli) -> Result<(), Error> {
             client.validate_auth().await
         }
     }
+}
+
+/// The shared steps of every `ask` subcommand: read the state, then send the
+/// one question. See `docs/cli-interface.md`.
+async fn ask(
+    settings: &Settings,
+    state: Option<String>,
+    question: Question,
+) -> Result<Answer, Error> {
+    let client = Client::new(settings, &api_key_from_env()?)?;
+    // The timeout covers the whole command, so it includes waiting on stdin.
+    let deadline = client.deadline();
+    let state = client.within(deadline, read_state(state)).await?;
+    client.ask_question(state.into(), question, deadline).await
+}
+
+/// Builds `choice` criteria in flag order. A key may appear only once, whether
+/// bare or with a description. See `docs/cli-interface.md`.
+fn choice_criteria(options: Vec<cli::ChoiceOption>) -> Result<ChoiceCriteria, Error> {
+    let mut seen = HashSet::new();
+    let mut criteria = Vec::with_capacity(options.len());
+    for option in options {
+        if !seen.insert(option.key.clone()) {
+            return Err(Error::Usage(format!(
+                "duplicate option key {:?}: each -o key may be given only once",
+                option.key
+            )));
+        }
+        criteria.push((option.key, option.description));
+    }
+    Ok(ChoiceCriteria(criteria))
+}
+
+/// The client only returns an answer of the question's type, so this is a bug.
+fn wrong_answer_type() -> Error {
+    Error::Internal("the answer does not match the question type".to_owned())
 }
 
 /// Picks the state from `--state` or stdin. See `docs/cli-interface.md`.
@@ -149,8 +196,8 @@ fn no_state() -> Error {
 }
 
 /// `true` if the unrounded probability exceeds `threshold`, otherwise `false`.
-fn boolean_text(answer: &Answer, threshold: f64) -> String {
-    (answer.probability() > threshold).to_string()
+fn boolean_text(probability: f64, threshold: f64) -> String {
+    (probability > threshold).to_string()
 }
 
 fn answer_json(answer: &Answer) -> Result<String, Error> {
@@ -193,11 +240,7 @@ mod tests {
         #[case] threshold: f64,
         #[case] expected: &str,
     ) {
-        let answer = Answer::Noul {
-            noul: serde_json::Number::from_f64(probability).unwrap(),
-            extra: serde_json::Map::new(),
-        };
-        assert_eq!(boolean_text(&answer, threshold), expected);
+        assert_eq!(boolean_text(probability, threshold), expected);
     }
 
     #[test]

@@ -28,6 +28,31 @@ exit_code 0 "Command succeeded, regardless of the answer"
 exit_code 1 "Usage, configuration, API, network, timeout or output error"
 cmd ask help="Ask Jev a question about some input text" subcommand_required=#true args_override_self=#false {
     flag "-h --help" help="Print help" action=help builtin=#true
+    cmd choice help="Pick one option from a list" args_override_self=#false {
+        flag --state help="Input text; takes precedence over stdin and leaves it unread" {
+            long_help #"""
+Input text; takes precedence over stdin and leaves it unread
+
+Without --state, read nonterminal stdin as UTF-8 text until EOF, preserving trailing newlines. Waiting for stdin counts toward --timeout. An explicit empty string supplies a state; empty stdin does not.
+"""#
+            arg <TEXT>
+        }
+        flag "-o --option" help="An option as key or key=description (repeat for 1-255 options)" required=#true var=#true var_max=255 {
+            long_help #"""
+An option as key or key=description (repeat for 1-255 options)
+
+The first = separates the key from its description, and later = characters belong to the description. A bare key is interpreted by its name alone. The chosen key is printed either way. Keys must be non-empty and unique.
+"""#
+            arg "<KEY[=DESCRIPTION]>" validate="value != \"\" && !(value startsWith \"=\")" validate_error="option key must not be empty"
+        }
+        flag --json help="Print the full answer object as one line of JSON"
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <QUESTION> help="The question that picks between the options"
+        example "gutcheck ask choice \"Which team owns this?\" -o billing -o platform -o other --state \"Payment page throws 500\"" header="Pick an option by name"
+        example "gutcheck ask choice \"Which team should handle this?\" -o billing=\"Payments, invoices, refunds\" -o platform=\"Infra, outages, server errors\" -o other=\"Anything else\" --state \"Payment page throws 500\"" header="Describe the options"
+        output plain help="The chosen option key" default=#true
+        output json media_type="application/json" framing=json help="The full API answer object" select=--json
+    }
     cmd noul help="Estimate the probability that a statement is true" args_override_self=#false {
         flag --state help="Input text; takes precedence over stdin and leaves it unread" {
             long_help #"""

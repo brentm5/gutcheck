@@ -69,7 +69,7 @@ The types:
 
 - Questions are an enum tagged on `type` (`choice`, `score`, `noul`) with an extra variant that keeps unknown types as raw JSON, so `ask_jev` can pass them through ([`api-client.md`](api-client.md)).
 - Answers follow the same pattern.
-- Only `noul` exists so far. The other types and the unknown-type variant arrive with the commands that need them.
+- Only `choice` and `noul` exist so far. `score` and the unknown-type variant arrive with the commands that need them.
 - Error bodies get their own types for `400` (`detail`) and `422` (`detail[]` with `loc`, `msg`).
 
 Validating against the spec:

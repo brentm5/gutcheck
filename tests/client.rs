@@ -465,6 +465,7 @@ async fn ask_retries_temporary_failures() {
 #[case::no_answers("{}")]
 #[case::other_id(r#"{"answers":{"other":{"type":"noul","noul":0.5}}}"#)]
 #[case::wrong_type(r#"{"answers":{"noul":{"type":"box","box":{}}}}"#)]
+#[case::other_known_type(r#"{"answers":{"noul":{"type":"choice","choice":"a"}}}"#)]
 #[case::missing_value(r#"{"answers":{"noul":{"type":"noul"}}}"#)]
 #[tokio::test]
 async fn ask_reports_an_unusable_success_response(#[case] body: &str) {

@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use crate::api::SystemOneRequest;
+use crate::api::{Question, SystemOneRequest};
 use crate::error::Error;
 
 /// The API's limit on the encoded request body: 32 MiB.
@@ -22,7 +22,27 @@ pub(crate) fn check_request(request: &SystemOneRequest) -> Result<(), Error> {
     if request.questions.keys().any(String::is_empty) {
         return Err(failed("questions: question IDs must not be empty"));
     }
+    for (id, question) in &request.questions {
+        check_question(question)
+            .map_err(|problem| failed(&format!("questions.{id}: {problem}")))?;
+    }
     Ok(())
+}
+
+/// The API's limit on `choice` options.
+pub const MAX_CHOICE_OPTIONS: usize = 255;
+
+fn check_question(question: &Question) -> Result<(), String> {
+    match question {
+        Question::Choice { criteria, .. } if criteria.is_empty() => {
+            Err("choice needs at least 1 option".to_owned())
+        }
+        Question::Choice { criteria, .. } if criteria.len() > MAX_CHOICE_OPTIONS => Err(format!(
+            "choice allows at most {MAX_CHOICE_OPTIONS} options"
+        )),
+        // `noul` criteria can only hold `true` and `false` by construction.
+        Question::Choice { .. } | Question::Noul { .. } => Ok(()),
+    }
 }
 
 pub fn check_body_size(bytes: usize) -> Result<(), Error> {
@@ -44,7 +64,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::api::Question;
+    use crate::api::ChoiceCriteria;
 
     fn request(model: &str, state: Value, ids: &[&str]) -> SystemOneRequest {
         let question = Question::noul("Is it?".to_owned(), Default::default());
@@ -81,6 +101,36 @@ mod tests {
         #[case] message: &str,
     ) {
         let error = check_request(&request(model, state, ids)).unwrap_err();
+        assert_eq!(error.to_string(), message);
+    }
+
+    fn choice_request(options: usize) -> SystemOneRequest {
+        let criteria = (0..options).map(|i| (format!("o{i}"), None)).collect();
+        SystemOneRequest {
+            model: "m".to_owned(),
+            state: json!("text"),
+            questions: BTreeMap::from([(
+                "team".to_owned(),
+                Question::choice("Which?".to_owned(), ChoiceCriteria(criteria)),
+            )]),
+        }
+    }
+
+    #[rstest]
+    #[case::one(1)]
+    #[case::most(MAX_CHOICE_OPTIONS)]
+    fn accepts_choice_option_counts_in_range(#[case] options: usize) {
+        check_request(&choice_request(options)).unwrap();
+    }
+
+    #[rstest]
+    #[case::none(0, "questions.team: choice needs at least 1 option")]
+    #[case::too_many(
+        MAX_CHOICE_OPTIONS + 1,
+        "questions.team: choice allows at most 255 options"
+    )]
+    fn rejects_choice_option_counts_out_of_range(#[case] options: usize, #[case] message: &str) {
+        let error = check_request(&choice_request(options)).unwrap_err();
         assert_eq!(error.to_string(), message);
     }
 
