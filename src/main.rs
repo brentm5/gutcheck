@@ -44,7 +44,8 @@ async fn cli_main() -> ExitCode {
         usage_rs::embedded::Outcome::Parsed(cli) => cli,
         usage_rs::embedded::Outcome::Exit(exit) => {
             let result = if exit.stderr {
-                write_output(io::stderr(), &exit.text)
+                let text = one_line_usage_error(&exit.text).unwrap_or(exit.text);
+                write_output(io::stderr(), &text)
             } else {
                 write_output(io::stdout(), &exit.text)
             };
@@ -167,6 +168,23 @@ fn wrong_answer_type() -> Error {
     Error::Internal("the answer does not match the question type".to_owned())
 }
 
+/// Turns a parser error into the one-line `error: ...` message every other error
+/// uses, dropping the usage line and hints after it. A message that spans lines,
+/// such as a list of missing flags, is joined with spaces. Text that isn't an
+/// error, like the help shown when a command is missing, gives `None`.
+/// See `docs/output-and-exit-codes.md`.
+fn one_line_usage_error(text: &str) -> Option<String> {
+    if !text.starts_with("error:") {
+        return None;
+    }
+    let message: Vec<&str> = text
+        .lines()
+        .take_while(|line| !line.trim().is_empty())
+        .map(str::trim)
+        .collect();
+    Some(format!("{}\n", message.join(" ")))
+}
+
 /// Picks the state from `--state` or stdin. See `docs/cli-interface.md`.
 async fn read_state(flag: Option<String>) -> Result<String, Error> {
     match flag {
@@ -241,6 +259,20 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(boolean_text(probability, threshold), expected);
+    }
+
+    #[rstest]
+    #[case::hint_dropped(
+        "error: invalid value '=x' for '--option': option key must not be empty\n\nFor more information, try '--help'.\n",
+        Some("error: invalid value '=x' for '--option': option key must not be empty\n")
+    )]
+    #[case::list_joined(
+        "error: the following required arguments were not provided:\n  --option\n\nUsage: gutcheck ask choice <FLAGS> <QUESTION>\n",
+        Some("error: the following required arguments were not provided: --option\n")
+    )]
+    #[case::help_kept("Ask Jev a question\n\nUsage: gutcheck ask <SUBCOMMAND>\n", None)]
+    fn usage_errors_become_one_line(#[case] text: &str, #[case] expected: Option<&str>) {
+        assert_eq!(one_line_usage_error(text).as_deref(), expected);
     }
 
     #[test]

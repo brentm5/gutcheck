@@ -838,6 +838,31 @@ async fn choice_accepts_255_options_and_rejects_256() {
         .stderr(predicate::str::contains("255"));
 }
 
+/// Parser errors are one line on stderr, like every other error.
+#[rstest]
+#[case::empty_key(
+    &["ask", "choice", "Q", "-o", "=Payments"],
+    "error: invalid value '=Payments' for '--option': option key must not be empty\n"
+)]
+#[case::missing_option(
+    &["ask", "choice", "Q"],
+    "error: the following required arguments were not provided: --option\n"
+)]
+#[case::repeated_flag(
+    &["ask", "noul", "Q", "--state", "a", "--state", "b"],
+    "error: the argument '--state' cannot be used multiple times\n"
+)]
+#[case::unknown_flag(&["--bogus"], "error: unexpected argument '--bogus' found\n")]
+fn parser_errors_are_one_line(#[case] args: &[&str], #[case] stderr: &str) {
+    gutcheck()
+        .args(args)
+        .env_remove("TYPESAFE_API_KEY")
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(stderr.to_owned());
+}
+
 #[test]
 fn choice_help_goes_to_stdout() {
     gutcheck()

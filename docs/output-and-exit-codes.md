@@ -111,7 +111,7 @@ A variable assignment containing command substitution has the command's exit sta
 ## Error output
 
 - Nothing is written to stdout, so a script never mistakes an error for an answer.
-- A one-line message goes to stderr, for example `error: questions.team: choice needs at least 1 option`.
+- A one-line message goes to stderr, for example `error: questions.team: choice needs at least 1 option`. Command-line usage errors follow the same rule, without the parser's usage line or hints. Help shown because a command is missing is not an error message and keeps its full text.
 - `--verbose` adds the HTTP status and the raw API response body to stderr.
 
 What causes each error, and which errors are retried first, is covered in [`api-client.md`](api-client.md).
