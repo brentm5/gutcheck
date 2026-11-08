@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels its older run. New pushes do not cancel
+# an in-progress run on main, though a pending one can still be replaced.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Smaller debug info keeps target/ and the cache small; backtraces keep line numbers.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
+jobs:
+  check:
+    name: Lint and test
+    # Linux only; there are no macOS or Windows jobs.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Installs the tools pinned in mise.toml (Rust, rumdl, Usage, jq), puts
+      # them on PATH for later steps, and caches the mise installs.
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+
+      # Caches the cargo registry and target/. Runs after mise so it keys on
+      # the pinned Rust version. Only main saves the cache; pull requests
+      # restore it but never write their own.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Lint
+        run: mise run lint
+
+      # The parser conformance test in src/cli.rs runs the Usage CLI, which
+      # mise-action has put on PATH.
+      - name: Test
+        run: mise run test

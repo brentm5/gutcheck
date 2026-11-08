@@ -125,7 +125,7 @@ The skill Markdown lives in the repo as a normal file and is compiled in with `i
 | Test      | `cargo test`, as a `test` mise task                                      |
 | API spec  | `spec:update` mise task to refresh `spec/openapi.json`                   |
 
-The pinned version is the latest stable release when it's set. It's bumped on purpose when a new stable ships (about every six weeks), in its own change, together with `rust-version` in `Cargo.toml`, so any new clippy warnings are fixed in that one change.
+The pinned version is the latest stable release when it's set. It's bumped on purpose when a new stable ships (about every six weeks), in its own change, together with `rust-version` in `Cargo.toml` and `mise.lock` (`mise run lock`), so any new clippy warnings are fixed in that one change.
 
 ## Distribution
 

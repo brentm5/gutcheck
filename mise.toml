@@ -40,6 +40,10 @@ run = "cargo build --release"
 description = "Run all tests"
 run = "cargo test"
 
+[tasks.lock]
+description = "Update mise.lock for Linux and macOS after changing a tool version"
+run = "mise lock --platform linux-x64,linux-arm64,macos-x64,macos-arm64"
+
 [tasks."spec:update"]
 description = "Download the latest OpenAPI spec to spec/openapi.json"
 # Pretty-printed so that changes to the spec are readable in review.
