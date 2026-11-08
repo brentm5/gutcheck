@@ -8,7 +8,8 @@ on:
 permissions:
   contents: read
 
-# A new push to a pull request cancels its older run. Runs on main always finish.
+# A new push to a pull request cancels its older run. New pushes do not cancel
+# an in-progress run on main, though a pending one can still be replaced.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

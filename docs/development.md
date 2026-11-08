@@ -98,7 +98,7 @@ GitHub Actions runs [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) on
 2. [`Swatinem/rust-cache`](https://github.com/Swatinem/rust-cache) caches the cargo registry and `target/`. Only runs on `main` save the cache (`save-if`); pull requests restore it but never write their own. `mise-action` caches the mise installs.
 3. `mise run lint`, then `mise run test`. The job fails if either fails.
 
-A new push to a pull request cancels that pull request's older run. Runs on `main` always finish. The workflow sets `CARGO_PROFILE_DEV_DEBUG=line-tables-only` to keep `target/` and the cache small, and `CARGO_TERM_COLOR=always` for readable logs.
+A new push to a pull request cancels that pull request's older run. New pushes do not cancel an in-progress run on `main`, though a pending one can still be replaced by a newer run. The workflow sets `CARGO_PROFILE_DEV_DEBUG=line-tables-only` to keep `target/` and the cache small, and `CARGO_TERM_COLOR=always` for readable logs.
 
 CI never calls the live API and needs no secrets ([`testing.md`](testing.md)).
 
