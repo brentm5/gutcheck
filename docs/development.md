@@ -72,11 +72,13 @@ mise exec -- usage explain --file gutcheck.usage.kdl -- gutcheck ask noul "The m
 
 ## CI
 
-GitHub Actions runs [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) on every pull request and on pushes to `main`. One job on `ubuntu-latest`:
+GitHub Actions runs [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) on every pull request and on pushes to `main`. CI builds on Linux only: one job on `ubuntu-latest`, with no macOS or Windows jobs and no OS matrix. The job times out after 30 minutes.
 
 1. [`jdx/mise-action`](https://github.com/jdx/mise-action) runs `mise install`, so CI uses the same versions as `mise.toml` with no separately pinned toolchain. This puts the Usage CLI on `PATH` for the parser conformance test.
-2. [`Swatinem/rust-cache`](https://github.com/Swatinem/rust-cache) caches the cargo registry and `target/`. `mise-action` caches the mise installs.
+2. [`Swatinem/rust-cache`](https://github.com/Swatinem/rust-cache) caches the cargo registry and `target/`. Only runs on `main` save the cache (`save-if`); pull requests restore it but never write their own. `mise-action` caches the mise installs.
 3. `mise run lint`, then `mise run test`. The job fails if either fails.
+
+A new push to a pull request cancels that pull request's older run. Runs on `main` always finish. The workflow sets `CARGO_PROFILE_DEV_DEBUG=line-tables-only` to keep `target/` and the cache small, and `CARGO_TERM_COLOR=always` for readable logs.
 
 CI never calls the live API and needs no secrets ([`testing.md`](testing.md)).
 
