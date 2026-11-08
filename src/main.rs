@@ -48,7 +48,7 @@ async fn cli_main() -> ExitCode {
                 let text = if exit.code == 0 {
                     None
                 } else {
-                    usage_error_line(&argv)
+                    usage_error_line(&argv, &exit.text)
                 };
                 write_output(io::stderr(), &text.unwrap_or(exit.text))
             } else {
@@ -177,57 +177,56 @@ fn wrong_answer_type() -> Error {
 /// `None` when the parser's response isn't an error message, like the help shown
 /// when a command or subcommand is missing. See `docs/output-and-exit-codes.md`.
 ///
-/// The parser's own rendering adds a usage line and hints after a blank line,
-/// and colours the text on a terminal. So this parses again and renders the error
-/// without colour, from words whose line breaks are spaces. Then a blank line can
-/// only end the message, never come from an argument, and the paragraph before it
-/// is the whole message. A message that lists items on their own lines, such as
-/// missing flags, is joined with spaces.
-fn usage_error_line(argv: &[OsString]) -> Option<String> {
-    let words: Vec<OsString> = argv.iter().map(|word| without_line_breaks(word)).collect();
-    let words: Vec<&OsStr> = words.iter().map(OsString::as_os_str).collect();
-    let error = Cli::parse_from(&words).err()?;
-    if matches!(
-        error,
+/// The parser's own rendering is coloured on a terminal and ends with a footer:
+/// a usage block for errors about the command line's shape, then a pointer to
+/// `--help`. So this takes the error for the same words, renders it without
+/// colour, and cuts that footer by its fixed structure. The usage line comes from
+/// the spec and is the last thing before the pointer, so the last usage heading
+/// is it, whatever the user typed. All whitespace runs, including line breaks in
+/// an argument and between listed items, then become single spaces.
+fn usage_error_line(argv: &[OsString], parser_text: &str) -> Option<String> {
+    let words: Vec<&OsStr> = argv.iter().map(OsString::as_os_str).collect();
+    // The same words failed to parse a moment ago, so this always fails too.
+    // Should it not, the parser's own text still goes out on one line.
+    let Err(error) = Cli::parse_from(&words) else {
+        return Some(one_line(parser_text));
+    };
+    let with_usage = match error {
         usage_rs::Error::Help { .. }
-            | usage_rs::Error::HelpAll { .. }
-            | usage_rs::Error::MissingArgsHelp { .. }
-            | usage_rs::Error::MissingSubcommand
-            | usage_rs::Error::Version { .. }
-    ) {
-        return None;
-    }
+        | usage_rs::Error::HelpAll { .. }
+        | usage_rs::Error::MissingArgsHelp { .. }
+        | usage_rs::Error::MissingSubcommand
+        | usage_rs::Error::Version { .. } => return None,
+        // The errors about a single value, which the parser renders without a
+        // usage block.
+        usage_rs::Error::MissingFlagValue { .. }
+        | usage_rs::Error::InvalidChoice { .. }
+        | usage_rs::Error::InvalidValue(_)
+        | usage_rs::Error::VarTooFew { .. }
+        | usage_rs::Error::VarTooMany { .. }
+        | usage_rs::Error::TooDeep
+        | usage_rs::Error::UnknownEnv(_) => false,
+        _ => true,
+    };
     let rendered = usage_rs::render_failure_plain(Cli::spec(), &words, &error);
-    let message: Vec<&str> = rendered
-        .lines()
-        .take_while(|line| !line.trim().is_empty())
-        .map(str::trim)
-        .collect();
-    Some(format!("{}\n", message.join(" ")))
+    let mut message = rendered.strip_suffix(HELP_POINTER).unwrap_or(&rendered);
+    if with_usage && let Some(at) = message.rfind(USAGE_HEADING) {
+        message = &message[..at];
+    }
+    Some(one_line(message))
 }
 
-/// `word` with each run of line breaks replaced by one space. A word without
-/// any is returned as is, so non-UTF-8 words parse exactly as before.
-fn without_line_breaks(word: &OsStr) -> OsString {
-    let is_break = |c: char| c == '\n' || c == '\r';
-    let text = word.to_string_lossy();
-    if !text.contains(is_break) {
-        return word.to_owned();
-    }
-    let mut out = String::with_capacity(text.len());
-    let mut in_break = false;
-    for c in text.chars() {
-        if is_break(c) {
-            if !in_break {
-                out.push(' ');
-            }
-            in_break = true;
-        } else {
-            out.push(c);
-            in_break = false;
-        }
-    }
-    out.into()
+/// The end of every error the parser renders.
+const HELP_POINTER: &str = "\nFor more information, try '--help'.\n";
+
+/// The start of the parser's usage block, after a blank line.
+const USAGE_HEADING: &str = "\n\nUsage: ";
+
+/// `text` with each whitespace run replaced by one space, as one line.
+fn one_line(text: &str) -> String {
+    let mut line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    line.push('\n');
+    line
 }
 
 /// Picks the state from `--state` or stdin. See `docs/cli-interface.md`.
@@ -319,20 +318,24 @@ mod tests {
         &["ask", "choice", "Q", "-o", "=a\n\nb"],
         Some("error: invalid value '=a b' for '--option': option key must not be empty\n")
     )]
+    #[case::usage_heading_in_a_value(
+        &["ask", "choice", "Q", "--bogus\n\nUsage: x"],
+        Some("error: unexpected argument '--bogus Usage: x' found tip: to pass '--bogus Usage: x' as a value, use '-- --bogus Usage: x'\n")
+    )]
     #[case::missing_command_help(&["ask"], None)]
     #[case::requested_help(&["ask", "choice", "--help"], None)]
-    #[case::valid(&["ask", "choice", "Q", "-o", "a"], None)]
     fn usage_errors_become_one_line(#[case] args: &[&str], #[case] expected: Option<&str>) {
         let argv: Vec<OsString> = args.iter().map(OsString::from).collect();
-        assert_eq!(usage_error_line(&argv).as_deref(), expected);
+        assert_eq!(usage_error_line(&argv, "parser text").as_deref(), expected);
     }
 
-    #[rstest]
-    #[case::unchanged("plain text", "plain text")]
-    #[case::newline("a\nb", "a b")]
-    #[case::crlf_run("a\r\n\r\nb", "a b")]
-    fn line_breaks_become_one_space(#[case] word: &str, #[case] expected: &str) {
-        assert_eq!(without_line_breaks(OsStr::new(word)), OsStr::new(expected));
+    #[test]
+    fn a_command_line_that_parses_keeps_the_parser_text_on_one_line() {
+        let argv: Vec<OsString> = ["ask", "choice", "Q", "-o", "a"].map(OsString::from).into();
+        assert_eq!(
+            usage_error_line(&argv, "error: a\n\nb\n").as_deref(),
+            Some("error: a b\n")
+        );
     }
 
     #[test]

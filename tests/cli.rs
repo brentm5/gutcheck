@@ -853,6 +853,10 @@ async fn choice_accepts_255_options_and_rejects_256() {
     "error: the argument '--state' cannot be used multiple times\n"
 )]
 #[case::unknown_flag(&["--bogus"], "error: unexpected argument '--bogus' found\n")]
+#[case::similar_flag(
+    &["ask", "noul", "Q", "--stat", "x"],
+    "error: unexpected argument '--stat' found tip: a similar argument exists: '--state'\n"
+)]
 #[case::blank_line_in_a_value(
     &["ask", "choice", "Q", "-o", "=Payments\n\nrefunds"],
     "error: invalid value '=Payments refunds' for '--option': option key must not be empty\n"
@@ -862,6 +866,30 @@ fn parser_errors_are_one_line(
     #[case] stderr: &str,
     #[values(false, true)] force_colour: bool,
 ) {
+    assert_parser_error(args, stderr, force_colour);
+}
+
+/// A word that isn't UTF-8 is reported with the bytes replaced, still on one
+/// line, and the line break after them becomes a space.
+#[cfg(unix)]
+#[rstest]
+fn non_utf8_parser_errors_are_one_line(#[values(false, true)] force_colour: bool) {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    assert_parser_error(
+        &[
+            OsStr::new("ask"),
+            OsStr::new("noul"),
+            OsStr::from_bytes(b"\xff\n"),
+        ],
+        "error: invalid value '\u{FFFD} ' for '<QUESTION>': \
+         invalid utf-8 sequence of 1 bytes from index 0\n",
+        force_colour,
+    );
+}
+
+fn assert_parser_error(args: &[impl AsRef<std::ffi::OsStr>], stderr: &str, force_colour: bool) {
     let mut command = gutcheck();
     command
         .args(args)
