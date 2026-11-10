@@ -4,7 +4,7 @@
 
 ## Principles
 
-- **Never call the real API.** No test talks to `api.typesafe.ai` or needs a real API key. Tests use a fake key and a local mock server.
+- **Automated tests never call the real API.** No test run by `mise run test` or CI talks to `api.typesafe.ai` or needs a real API key. Tests use a fake key and a local mock server. The [manual evaluations](#manual-evaluations) are the only exception, and they are run by hand.
 - **Test through real HTTP.** The client is tested against a local mock server rather than a mocked trait, so reqwest, headers, retries, `Retry-After` and the timeout are all exercised the way they run in production.
 - **Built-in test framework.** Tests use Rust's standard `cargo test`, with a few helper crates (below).
 
@@ -72,6 +72,34 @@ Check our serde types against the checked-in `spec/openapi.json` with jsonschema
 ## Fixtures
 
 Sample API responses live in `tests/fixtures/` as JSON files, one per case (for example `choice_success.json`, `validation_error_422.json`). Each is checked against the spec, so the mocks can't drift from the real API.
+
+## Manual evaluations
+
+`mise run eval` runs the release `gutcheck` binary against the **real** Jev API, to check that the CLI works end to end. It covers what the mocked tests can't show:
+
+- that the real API accepts the requests we build;
+- that real answers come back in the shape we expect and make sense;
+- that real API errors produce clear messages.
+
+Run it by hand with a real key from fnox:
+
+```bash
+fnox exec -- mise run eval
+```
+
+It uses a real API key and spends real API calls (about 16 per run), so it is kept small. It is never part of `mise run test` or CI. Without `TYPESAFE_API_KEY`, the task exits `1` right away with a one-line message saying how to run it. Otherwise it builds the release binary and runs `evals/run.sh`.
+
+The cases live in one bash script, `evals/run.sh`, which checks JSON with `jq`. Each case prints `PASS` or `FAIL` and its name. A failure also prints the command, exit code, stdout and stderr, with the API key redacted. The run ends with a summary and exits `1` if any case failed.
+
+| Group           | Cases                                                                                                                                                                                                                                                                 |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Contract        | For `noul`, `choice` and `score`: plain output (one line of the right shape, nothing on stderr) and `--json` (one line of JSON with the type's fields), with state from `--state` and from stdin. `noul --boolean` prints `true` or `false`. `auth validate` succeeds |
+| Answer sanity   | Clear-cut questions with loose thresholds, since model output isn't deterministic: an obvious yes is above `0.8` and an obvious no below `0.2`; a refund request picks `billing`; a furious message scores at least levels − 1.5 and a calm one at most `0.5`         |
+| Real API errors | An invalid key (`401`) for one `ask` call and for `auth validate`, and `--model does-not-exist`. Each prints nothing on stdout, one line on stderr naming the problem, and exits `1`                                                                                  |
+
+Local checks and the other error cases are covered by the mocked tests and are not repeated here. A mock-backed mode would repeat `tests/cli.rs`, so there isn't one.
+
+When a later command lands (`mcp serve`, `skill`), its change adds eval cases for it.
 
 ## Running tests
 
