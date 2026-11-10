@@ -838,6 +838,197 @@ async fn choice_accepts_255_options_and_rejects_256() {
         .stderr(predicate::str::contains("255"));
 }
 
+const SCORE_SUCCESS: &str = include_str!("fixtures/score_success.json");
+
+fn ask_score(config: &NamedTempFile) -> Command {
+    let mut command = gutcheck();
+    command
+        .args([
+            "ask",
+            "score",
+            "How frustrated is the customer?",
+            "--config",
+        ])
+        .arg(config.path())
+        .env("TYPESAFE_API_KEY", "test-key");
+    command
+}
+
+fn score_answer(score: &str) -> String {
+    format!(r#"{{"answers":{{"score":{{"type":"score","score":{score},"confidence":0.7}}}}}}"#)
+}
+
+/// Levels are sent as an array in flag order, so the first is `0`. Numbers
+/// inside a description don't move it.
+#[rstest]
+#[case::calm_first(
+    &["-l", "Calm", "-l", "Annoyed", "--level", "Angry"],
+    r#"["Calm","Annoyed","Angry"]"#
+)]
+#[case::numbers_in_descriptions(
+    &["-l", "2: Angry", "-l", "0: Calm"],
+    r#"["2: Angry","0: Calm"]"#
+)]
+#[case::one_level(&["-l", "Calm"], r#"["Calm"]"#)]
+#[tokio::test]
+async fn score_sends_the_levels_in_flag_order(#[case] levels: &[&str], #[case] criteria: &str) {
+    let server = MockServer::start().await;
+    let body = format!(
+        r#"{{"model":"jev-latest","state":"the input","questions":{{"score":{{"type":"score","instructions":"How frustrated is the customer?","criteria":{criteria}}}}}}}"#
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .and(body_string(body))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SCORE_SUCCESS))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    ask_score(&config_for(&server))
+        .args(["--state", "the input"])
+        .args(levels)
+        .assert()
+        .success()
+        .stdout("1.8\n")
+        .stderr("");
+}
+
+#[tokio::test]
+async fn score_reads_state_from_stdin() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .and(body_partial_json(json!({"state": "piped input\n"})))
+        .respond_with(ResponseTemplate::new(200).set_body_string(SCORE_SUCCESS))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    ask_score(&config_for(&server))
+        .args(["-l", "Calm", "-l", "Annoyed", "-l", "Angry"])
+        .write_stdin("piped input\n")
+        .assert()
+        .success()
+        .stdout("1.8\n");
+}
+
+/// The score is printed as the API sent it, with the shared plain-number
+/// display and no snapping to a level or rescaling.
+#[rstest]
+#[case::fractional("1.8", "1.8\n")]
+#[case::between_levels("0.5", "0.5\n")]
+#[case::rounded("1.23456", "1.235\n")]
+#[case::trailing_zeros("2.000", "2\n")]
+#[case::whole("1", "1\n")]
+#[case::tiny("1e-7", "0\n")]
+#[case::negative_zero("-0.0001", "0\n")]
+#[tokio::test]
+async fn score_prints_a_plain_number(#[case] score: &str, #[case] expected: &str) {
+    let server = MockServer::start().await;
+    mock_systemone(&server, 200, &score_answer(score)).await;
+
+    ask_score(&config_for(&server))
+        .args([
+            "--state", "text", "-l", "Calm", "-l", "Annoyed", "-l", "Angry",
+        ])
+        .assert()
+        .success()
+        .stdout(expected.to_owned())
+        .stderr("");
+}
+
+#[tokio::test]
+async fn score_json_prints_only_the_answer_on_one_line() {
+    let server = MockServer::start().await;
+    mock_systemone(&server, 200, SCORE_SUCCESS).await;
+
+    ask_score(&config_for(&server))
+        .args(["--state", "text", "-l", "Calm", "-l", "Annoyed", "-l", "Angry", "--json"])
+        .assert()
+        .success()
+        .stdout(
+            "{\"type\":\"score\",\"score\":1.8,\"legend\":{\"0\":\"Calm\",\"1\":\"Annoyed\",\"2\":\"Angry\"},\"probabilities\":{\"0\":0.02,\"1\":0.16,\"2\":0.82},\"confidence\":0.74}\n",
+        )
+        .stderr("");
+}
+
+#[tokio::test]
+async fn score_json_keeps_the_unrounded_score() {
+    let server = MockServer::start().await;
+    mock_systemone(&server, 200, &score_answer("1.23456")).await;
+
+    ask_score(&config_for(&server))
+        .args([
+            "--state", "text", "-l", "Calm", "-l", "Annoyed", "-l", "Angry", "--json",
+        ])
+        .assert()
+        .success()
+        .stdout("{\"type\":\"score\",\"score\":1.23456,\"confidence\":0.7}\n");
+}
+
+#[tokio::test]
+async fn score_rejects_an_answer_of_another_type() {
+    let server = MockServer::start().await;
+    mock_systemone(
+        &server,
+        200,
+        r#"{"answers":{"score":{"type":"noul","noul":0.5}}}"#,
+    )
+    .await;
+
+    ask_score(&config_for(&server))
+        .args(["--state", "text", "-l", "Calm"])
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr("error: unexpected API response: it has no usable answer\n");
+}
+
+#[rstest]
+#[case::no_levels(&[], "--level")]
+#[case::repeated_json(&["-l", "a", "--json", "--json"], "multiple times")]
+#[case::noul_flag(&["-l", "a", "--boolean"], "--boolean")]
+#[tokio::test]
+async fn score_level_errors_exit_1_without_a_request(
+    #[case] flags: &[&str],
+    #[case] stderr_contains: &str,
+) {
+    let server = MockServer::start().await;
+    expect_no_requests(&server).await;
+
+    ask_score(&config_for(&server))
+        .args(["--state", "text"])
+        .args(flags)
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(predicate::str::contains(stderr_contains));
+}
+
+#[tokio::test]
+async fn score_accepts_10_levels_and_rejects_11() {
+    let server = MockServer::start().await;
+    mock_systemone(&server, 200, SCORE_SUCCESS).await;
+    let levels = |count: usize| -> Vec<String> {
+        (0..count)
+            .flat_map(|i| ["-l".to_owned(), format!("level {i}")])
+            .collect()
+    };
+
+    ask_score(&config_for(&server))
+        .args(["--state", "text"])
+        .args(levels(10))
+        .assert()
+        .success();
+    ask_score(&config_for(&server))
+        .args(["--state", "text"])
+        .args(levels(11))
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(predicate::str::contains("10"));
+}
+
 /// Parser errors are one line on stderr, like every other error.
 #[rstest]
 #[case::empty_key(

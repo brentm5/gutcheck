@@ -80,7 +80,27 @@ fn choice_requests_match_the_spec(#[case] options: &[(&str, Option<&str>)]) {
 }
 
 #[rstest]
+#[case::one_level(&["Calm"])]
+#[case::several_levels(&["Calm", "Annoyed", "Angry"])]
+fn score_requests_match_the_spec(#[case] levels: &[&str]) {
+    let request = SystemOneRequest {
+        model: "jev-latest".to_owned(),
+        state: json!("text"),
+        questions: BTreeMap::from([(
+            "score".to_owned(),
+            Question::score(
+                "How frustrated?".to_owned(),
+                levels.iter().map(|level| (*level).to_owned()).collect(),
+            ),
+        )]),
+    };
+
+    assert_valid("SystemOneRequest", &serde_json::to_value(&request).unwrap());
+}
+
+#[rstest]
 #[case::noul(include_str!("fixtures/noul_success.json"), "noul")]
+#[case::score(include_str!("fixtures/score_success.json"), "score")]
 #[case::choice(include_str!("fixtures/choice_success.json"), "choice")]
 fn response_fixtures_match_the_spec_and_our_types(#[case] body: &str, #[case] id: &str) {
     assert_valid("SystemOneResponse", &serde_json::from_str(body).unwrap());
@@ -89,6 +109,7 @@ fn response_fixtures_match_the_spec_and_our_types(#[case] body: &str, #[case] id
     let expected_type = match answer {
         Answer::Choice { .. } => "choice",
         Answer::Noul { .. } => "noul",
+        Answer::Score { .. } => "score",
     };
     assert_eq!(expected_type, id);
 }

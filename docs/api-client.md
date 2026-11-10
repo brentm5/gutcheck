@@ -68,7 +68,7 @@ For `422`, the `loc` path starts with `"body"`. We drop that prefix and join the
 
 If a `400` or `422` body doesn't have the documented shape, or its `detail` or every `msg` is empty, the error is reported as `unexpected API response (HTTP <status>)`. So is a `2xx` response without a usable answer, using the message `unexpected API response: it has no usable answer`. Neither is retried, and `--verbose` shows the body.
 
-**Not implemented yet:** `gutcheck ask choice` and `gutcheck ask noul` are the only commands that send questions so far. The `score` check and the pass-through for unknown question types arrive with `ask score` and `ask_jev`.
+**Not implemented yet:** the pass-through for unknown question types arrives with `ask_jev`.
 
 With `--verbose`, errors are printed in full (status code and raw body), which helps when the API's error doesn't fit the mapping above.
 

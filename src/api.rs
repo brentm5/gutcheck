@@ -28,6 +28,11 @@ pub enum Question {
         #[serde(skip_serializing_if = "Option::is_none")]
         criteria: Option<NoulCriteria>,
     },
+    Score {
+        instructions: String,
+        /// The level descriptions, lowest first. A level's position is its score.
+        criteria: Vec<String>,
+    },
 }
 
 impl Question {
@@ -48,12 +53,21 @@ impl Question {
         }
     }
 
+    /// A `score` question. `levels` are in rubric order: the first is `0`.
+    pub fn score(instructions: String, levels: Vec<String>) -> Self {
+        Question::Score {
+            instructions,
+            criteria: levels,
+        }
+    }
+
     /// The question's type as the API names it. A CLI request holds one question
     /// and uses this as its ID, so API errors read `questions.noul.criteria: ...`.
     pub(crate) fn kind(&self) -> &'static str {
         match self {
             Question::Choice { .. } => "choice",
             Question::Noul { .. } => "noul",
+            Question::Score { .. } => "score",
         }
     }
 }
@@ -117,6 +131,11 @@ pub enum Answer {
         #[serde(flatten)]
         extra: Map<String, Value>,
     },
+    Score {
+        score: Number,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
 }
 
 impl Answer {
@@ -125,6 +144,7 @@ impl Answer {
         match self {
             Answer::Choice { .. } => "choice",
             Answer::Noul { .. } => "noul",
+            Answer::Score { .. } => "score",
         }
     }
 
@@ -132,18 +152,31 @@ impl Answer {
     pub fn choice(&self) -> Option<&str> {
         match self {
             Answer::Choice { choice, .. } => Some(choice),
-            Answer::Noul { .. } => None,
+            Answer::Noul { .. } | Answer::Score { .. } => None,
         }
     }
 
-    /// A `noul` answer's probability. A `Number` always converts, because
-    /// `arbitrary_precision` is off and JSON can't hold a non-finite float.
+    /// A `noul` answer's probability.
     pub fn probability(&self) -> Option<f64> {
         match self {
-            Answer::Noul { noul, .. } => Some(noul.as_f64().unwrap_or(f64::NAN)),
-            Answer::Choice { .. } => None,
+            Answer::Noul { noul, .. } => Some(number(noul)),
+            Answer::Choice { .. } | Answer::Score { .. } => None,
         }
     }
+
+    /// A `score` answer's probability-weighted score.
+    pub fn score(&self) -> Option<f64> {
+        match self {
+            Answer::Score { score, .. } => Some(number(score)),
+            Answer::Choice { .. } | Answer::Noul { .. } => None,
+        }
+    }
+}
+
+/// A `Number` always converts, because `arbitrary_precision` is off and JSON
+/// can't hold a non-finite float.
+fn number(value: &Number) -> f64 {
+    value.as_f64().unwrap_or(f64::NAN)
 }
 
 /// The body of a `400` response.
@@ -211,15 +244,39 @@ mod tests {
         );
     }
 
+    /// Levels are sent as an array in the order given, so position is the score.
+    #[test]
+    fn score_criteria_keep_order() {
+        let question = Question::score(
+            "How frustrated?".to_owned(),
+            vec![
+                "Calm".to_owned(),
+                "2 Annoyed".to_owned(),
+                "Angry".to_owned(),
+            ],
+        );
+        assert_eq!(
+            serde_json::to_string(&question).unwrap(),
+            r#"{"type":"score","instructions":"How frustrated?","criteria":["Calm","2 Annoyed","Angry"]}"#
+        );
+    }
+
     #[test]
     fn answers_read_only_their_own_type() {
         let choice: Answer =
             serde_json::from_value(json!({"type": "choice", "choice": "platform"})).unwrap();
         assert_eq!(choice.choice(), Some("platform"));
         assert_eq!(choice.probability(), None);
+        assert_eq!(choice.score(), None);
 
         let noul: Answer = serde_json::from_value(json!({"type": "noul", "noul": 0.5})).unwrap();
         assert_eq!(noul.probability(), Some(0.5));
         assert_eq!(noul.choice(), None);
+        assert_eq!(noul.score(), None);
+
+        let score: Answer = serde_json::from_value(json!({"type": "score", "score": 1.8})).unwrap();
+        assert_eq!(score.score(), Some(1.8));
+        assert_eq!(score.probability(), None);
+        assert_eq!(score.choice(), None);
     }
 }

@@ -74,6 +74,8 @@ pub(crate) struct AuthArgs {
 pub(crate) enum AskCommand {
     /// Pick one option from a list
     Choice(ChoiceArgs),
+    /// Place the input on an ordered rubric
+    Score(ScoreArgs),
     /// Estimate the probability that a statement is true
     Noul(NoulArgs),
 }
@@ -155,6 +157,59 @@ impl FromStr for ChoiceOption {
             description,
         })
     }
+}
+
+#[derive(Debug, Args)]
+#[usage(
+    args_override_self = false,
+    output(
+        "plain",
+        default,
+        help = "Probability-weighted score as an ordinary decimal, rounded to at most three decimal places, with trailing zeros removed"
+    ),
+    output(
+        "json",
+        select = "--json",
+        media_type = "application/json",
+        framing = "json",
+        help = "The full API answer object, without display rounding"
+    ),
+    example(
+        "gutcheck ask score \"How frustrated is the customer?\" -l Calm -l Annoyed -l Angry --state \"This is the third time I've asked. Fix it.\"",
+        header = "Rate against an ordered rubric"
+    )
+)]
+pub(crate) struct ScoreArgs {
+    /// The question that rates the input
+    pub question: String,
+
+    /// Input text; takes precedence over stdin and leaves it unread
+    ///
+    /// Without --state, read nonterminal stdin as UTF-8 text until EOF, preserving
+    /// trailing newlines. Waiting for stdin counts toward --timeout. An explicit
+    /// empty string supplies a state; empty stdin does not.
+    #[usage(long, value_name = "TEXT")]
+    pub state: Option<String>,
+
+    /// A rubric level description, lowest first (repeat for 1-10 levels)
+    ///
+    /// Flag order defines the rubric: the first level scores 0, the second 1, and
+    /// so on. Numbers inside a description do not change its position. The score
+    /// is the probability-weighted average of the positions and may fall between
+    /// levels.
+    #[usage(
+        short,
+        long = "level",
+        var,
+        required,
+        var_max = 10,
+        value_name = "DESCRIPTION"
+    )]
+    pub levels: Vec<String>,
+
+    /// Print the full answer object as one line of JSON, without display rounding
+    #[usage(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -293,6 +348,17 @@ mod tests {
         let most_options: Vec<&str> = most_options.iter().map(String::as_str).collect();
         let too_many_options = choice_with(256);
         let too_many_options: Vec<&str> = too_many_options.iter().map(String::as_str).collect();
+        let score_with = |count: usize| -> Vec<String> {
+            let mut args = vec!["ask".to_owned(), "score".to_owned(), "How?".to_owned()];
+            for i in 0..count {
+                args.extend(["-l".to_owned(), format!("level {i}")]);
+            }
+            args
+        };
+        let most_levels = score_with(10);
+        let most_levels: Vec<&str> = most_levels.iter().map(String::as_str).collect();
+        let too_many_levels = score_with(11);
+        let too_many_levels: Vec<&str> = too_many_levels.iter().map(String::as_str).collect();
         let cases: &[(&[&str], bool)] = &[
             (&["ask", "noul", "Urgent?"], true),
             (&["ask", "noul", "Urgent?", "--boolean"], true),
@@ -355,6 +421,20 @@ mod tests {
                 false,
             ),
             (&["ask", "choice", "Team?", "-o", "a", "--boolean"], false),
+            (&["ask", "score", "How?"], false),
+            (&["ask", "score", "How?", "-l", "Calm"], true),
+            (
+                &["ask", "score", "How?", "-l", "Calm", "--level", "Angry"],
+                true,
+            ),
+            (&["ask", "score", "How?", "-l", "Calm", "--json"], true),
+            (&most_levels, true),
+            (&too_many_levels, false),
+            (
+                &["ask", "score", "How?", "-l", "a", "--json", "--json"],
+                false,
+            ),
+            (&["ask", "score", "How?", "-l", "a", "--boolean"], false),
             (&["auth", "validate"], true),
         ];
 
