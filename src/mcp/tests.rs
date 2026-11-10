@@ -234,6 +234,41 @@ async fn model_argument_overrides_the_configured_model(
     connection.stop().await;
 }
 
+/// The API takes any JSON value for instructions and descriptions, and
+/// `instructions` is optional, so these are sent as given.
+#[tokio::test]
+async fn known_types_take_any_json_for_their_text() {
+    let server = MockServer::start().await;
+    let questions = json!({
+        "team": {
+            "type": "choice",
+            "instructions": {"ask": "Which team?"},
+            "criteria": {"billing": {"covers": ["refunds"]}, "other": null},
+        },
+        "mood": {"type": "score", "criteria": ["Calm", {"level": "Angry"}]},
+        "urgent": {"type": "noul", "criteria": {"true": ["outage", "data loss"]}},
+    });
+    let answers = json!({
+        "team": {"type": "choice", "choice": "billing"},
+        "mood": {"type": "score", "score": 0.2},
+        "urgent": {"type": "noul", "noul": 0.1},
+    });
+    expect_request(
+        &server,
+        json!({"model": CONFIGURED_MODEL, "state": "text", "questions": questions}),
+        response(answers.clone()),
+    )
+    .await;
+    let connection = Connection::start(&server.uri()).await;
+
+    let result = connection
+        .call(json!({"state": "text", "questions": questions}))
+        .await;
+
+    assert_eq!(success(&result), answers);
+    connection.stop().await;
+}
+
 #[tokio::test]
 async fn unknown_question_types_pass_through_unchanged() {
     let server = MockServer::start().await;
@@ -307,7 +342,7 @@ async fn unknown_question_types_pass_through_unchanged() {
     json!({"state": "text", "questions": {"urgent": {"type": "noul", "instructions": "Urgent?", "criteria": {"true": "yes", "maybe": "unsure"}}}}),
     "questions.urgent: noul criteria may only have true and false keys"
 )]
-#[case::raw_choice_with_no_options(
+#[case::choice_with_object_instructions_and_no_options(
     json!({"state": "text", "questions": {"team": {"type": "choice", "instructions": {"ask": "Which?"}, "criteria": {}}}}),
     "questions.team: choice needs at least 1 option"
 )]

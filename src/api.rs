@@ -67,27 +67,32 @@ impl AskRequest {
     }
 }
 
-/// A single question, tagged on `type` in JSON. A question of a type
-/// `gutcheck` doesn't know, or one whose fields don't fit these types, is kept
-/// as raw JSON in [`Question::Other`] and sent as is, for the API to judge.
+/// A single question, tagged on `type` in JSON. Text fields take any JSON
+/// value, as the API does (a string, object or array), and a `null` one is sent
+/// as left out. A question of a type `gutcheck` doesn't know, or one whose
+/// fields don't fit these types, is kept as raw JSON in [`Question::Other`] and
+/// sent as is, for the API to judge.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Question {
     Choice {
-        instructions: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instructions: Option<Value>,
         #[serde(default)]
         criteria: ChoiceCriteria,
     },
     Noul {
-        instructions: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instructions: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         criteria: Option<NoulCriteria>,
     },
     Score {
-        instructions: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instructions: Option<Value>,
         /// The level descriptions, lowest first. A level's position is its score.
         #[serde(default)]
-        criteria: Vec<String>,
+        criteria: Vec<Value>,
     },
     /// Any other question, including its `type`, unchanged.
     #[serde(untagged)]
@@ -98,7 +103,7 @@ impl Question {
     /// A `choice` question.
     pub fn choice(instructions: String, criteria: ChoiceCriteria) -> Self {
         Question::Choice {
-            instructions,
+            instructions: Some(instructions.into()),
             criteria,
         }
     }
@@ -107,7 +112,7 @@ impl Question {
     pub fn noul(instructions: String, criteria: NoulCriteria) -> Self {
         let described = criteria.if_true.is_some() || criteria.if_false.is_some();
         Question::Noul {
-            instructions,
+            instructions: Some(instructions.into()),
             criteria: described.then_some(criteria),
         }
     }
@@ -115,8 +120,8 @@ impl Question {
     /// A `score` question. `levels` are in rubric order: the first is `0`.
     pub fn score(instructions: String, levels: Vec<String>) -> Self {
         Question::Score {
-            instructions,
-            criteria: levels,
+            instructions: Some(instructions.into()),
+            criteria: levels.into_iter().map(Value::from).collect(),
         }
     }
 
@@ -137,7 +142,7 @@ impl Question {
 /// description, or to `null` when the option is interpreted by its name alone.
 /// Keys should be unique; the CLI rejects duplicates before building this.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct ChoiceCriteria(pub Vec<(String, Option<String>)>);
+pub struct ChoiceCriteria(pub Vec<(String, Value)>);
 
 impl ChoiceCriteria {
     pub fn len(&self) -> usize {
@@ -183,14 +188,15 @@ impl Serialize for ChoiceCriteria {
     }
 }
 
-/// What counts as a yes and a no for a `noul` question.
+/// What counts as a yes and a no for a `noul` question. Any other key makes
+/// the question [`Question::Other`], which the local checks reject.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NoulCriteria {
-    #[serde(rename = "true", skip_serializing_if = "Option::is_none")]
-    pub if_true: Option<String>,
-    #[serde(rename = "false", skip_serializing_if = "Option::is_none")]
-    pub if_false: Option<String>,
+    #[serde(rename = "true", default, skip_serializing_if = "Option::is_none")]
+    pub if_true: Option<Value>,
+    #[serde(rename = "false", default, skip_serializing_if = "Option::is_none")]
+    pub if_false: Option<Value>,
 }
 
 /// The parts of a `POST /v1/systemone` response that `gutcheck` uses.
@@ -310,8 +316,8 @@ mod tests {
         let question = Question::noul(
             "Is it?".to_owned(),
             NoulCriteria {
-                if_true: if_true.map(str::to_owned),
-                if_false: if_false.map(str::to_owned),
+                if_true: if_true.map(Value::from),
+                if_false: if_false.map(Value::from),
             },
         );
         assert_eq!(serde_json::to_value(&question).unwrap(), expected);
@@ -324,8 +330,8 @@ mod tests {
         let question = Question::choice(
             "Which team?".to_owned(),
             ChoiceCriteria(vec![
-                ("platform".to_owned(), None),
-                ("billing".to_owned(), Some("Payments".to_owned())),
+                ("platform".to_owned(), Value::Null),
+                ("billing".to_owned(), json!("Payments")),
             ]),
         );
         assert_eq!(
@@ -349,6 +355,20 @@ mod tests {
             serde_json::to_string(&question).unwrap(),
             r#"{"type":"score","instructions":"How frustrated?","criteria":["Calm","2 Annoyed","Angry"]}"#
         );
+    }
+
+    /// Known types take any JSON value where the API does, and stay typed so
+    /// the local checks apply. `noul` criteria with another key don't fit.
+    #[rstest]
+    #[case::choice(json!({"type": "choice", "instructions": ["a"], "criteria": {"x": {"y": 1}, "z": null}}), Some("choice"))]
+    #[case::score_without_instructions(json!({"type": "score", "criteria": [{"level": 0}]}), Some("score"))]
+    #[case::noul(json!({"type": "noul", "instructions": {"q": "?"}, "criteria": {"false": ["no"]}}), Some("noul"))]
+    #[case::noul_other_key(json!({"type": "noul", "criteria": {"maybe": "?"}}), None)]
+    #[case::unknown(json!({"type": "box", "instructions": "logo"}), None)]
+    fn known_types_take_any_json_text(#[case] question: Value, #[case] kind: Option<&str>) {
+        let parsed: Question = serde_json::from_value(question.clone()).unwrap();
+        assert_eq!(parsed.kind(), kind);
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), question);
     }
 
     #[test]

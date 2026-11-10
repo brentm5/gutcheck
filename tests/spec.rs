@@ -48,8 +48,8 @@ fn noul_requests_match_the_spec(#[case] if_true: Option<&str>, #[case] if_false:
             Question::noul(
                 "Is it?".to_owned(),
                 NoulCriteria {
-                    if_true: if_true.map(str::to_owned),
-                    if_false: if_false.map(str::to_owned),
+                    if_true: if_true.map(Value::from),
+                    if_false: if_false.map(Value::from),
                 },
             ),
         )]),
@@ -65,7 +65,12 @@ fn noul_requests_match_the_spec(#[case] if_true: Option<&str>, #[case] if_false:
 fn choice_requests_match_the_spec(#[case] options: &[(&str, Option<&str>)]) {
     let criteria = options
         .iter()
-        .map(|(key, description)| ((*key).to_owned(), description.map(str::to_owned)))
+        .map(|(key, description)| {
+            (
+                (*key).to_owned(),
+                description.map_or(Value::Null, Value::from),
+            )
+        })
         .collect();
     let request = SystemOneRequest {
         model: "jev-latest".to_owned(),

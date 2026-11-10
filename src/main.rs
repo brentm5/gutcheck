@@ -12,6 +12,7 @@ use gutcheck::api::{Answer, ChoiceCriteria, NoulCriteria, Question};
 use gutcheck::{
     Client, Error, MAX_BODY_BYTES, Overrides, Settings, api_key_from_env, check_body_size,
 };
+use serde_json::Value;
 use tokio::io::AsyncReadExt;
 
 fn main() -> ExitCode {
@@ -121,8 +122,8 @@ async fn run(cli: Cli, verbose: bool) -> Result<(), Error> {
             command: AskCommand::Noul(args),
         }) => {
             let criteria = NoulCriteria {
-                if_true: args.if_true,
-                if_false: args.if_false,
+                if_true: args.if_true.map(Value::from),
+                if_false: args.if_false.map(Value::from),
             };
             let question = Question::noul(args.question, criteria);
             let answer = ask(&settings, args.state, question).await?;
@@ -183,7 +184,10 @@ fn choice_criteria(options: Vec<cli::ChoiceOption>) -> Result<ChoiceCriteria, Er
                 option.key
             )));
         }
-        criteria.push((option.key, option.description));
+        criteria.push((
+            option.key,
+            option.description.map_or(Value::Null, Value::from),
+        ));
     }
     Ok(ChoiceCriteria(criteria))
 }

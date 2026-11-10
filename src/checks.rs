@@ -46,8 +46,9 @@ fn check_question(question: &Question) -> Result<(), String> {
 }
 
 /// The same rules for a question kept as raw JSON: one of a known type whose
-/// values don't fit our types, such as an object as an option description.
-/// Unknown types, and anything else the API must judge, pass.
+/// fields don't fit our types, such as `noul` criteria with another key, or
+/// `score` criteria with a `null` level. Unknown types, and anything else the
+/// API must judge, pass.
 fn check_raw_question(fields: &Map<String, Value>) -> Result<(), String> {
     match (
         fields.get("type").and_then(Value::as_str),
@@ -142,7 +143,9 @@ mod tests {
     }
 
     fn choice_request(options: usize) -> SystemOneRequest {
-        let criteria = (0..options).map(|i| (format!("o{i}"), None)).collect();
+        let criteria = (0..options)
+            .map(|i| (format!("o{i}"), Value::Null))
+            .collect();
         SystemOneRequest {
             model: "m".to_owned(),
             state: json!("text"),
