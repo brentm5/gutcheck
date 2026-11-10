@@ -13,6 +13,7 @@ publish = false
 bytes = "1.12.1"
 httpdate = "1.0.3"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2"] }
+rmcp = { version = "3.9.0", default-features = false, features = ["server", "transport-io"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
 thiserror = "2.0.21"
@@ -22,8 +23,10 @@ usage-rs = { version = "=7.3.0", features = ["validation"] }
 
 [dev-dependencies]
 assert_cmd = "2.2.2"
+insta = { version = "1.49.0", features = ["json"] }
 jsonschema = "0.60.2"
 predicates = "3.1.4"
+rmcp = { version = "3.9.0", default-features = false, features = ["client"] }
 rstest = "0.28.0"
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["macros"] }

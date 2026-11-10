@@ -110,6 +110,7 @@ fn response_fixtures_match_the_spec_and_our_types(#[case] body: &str, #[case] id
         Answer::Choice { .. } => "choice",
         Answer::Noul { .. } => "noul",
         Answer::Score { .. } => "score",
+        Answer::Other(_) => "other",
     };
     assert_eq!(expected_type, id);
 }

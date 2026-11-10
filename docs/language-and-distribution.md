@@ -36,6 +36,7 @@ src/
   cli.rs    usage-rs command declarations and CLI value types
   main.rs   thin: parse args, call the library, map errors to exit codes
   output.rs plain numeric CLI formatting
+  mcp.rs    the `gutcheck mcp serve` server and the `gutcheck_ask` tool (rmcp)
 tests/      integration tests against the library (including spec validation)
 spec/       checked-in copy of TypeSafe's openapi.json
 ```
@@ -67,9 +68,9 @@ Hand-written serde types for the request and response, **validated against TypeS
 
 The types:
 
-- Questions are an enum tagged on `type` (`choice`, `score`, `noul`) with an extra variant that keeps unknown types as raw JSON, so `ask_jev` can pass them through ([`api-client.md`](api-client.md)).
+- Questions are an enum tagged on `type` (`choice`, `score`, `noul`) with an extra variant that keeps unknown types as raw JSON, so `gutcheck_ask` can pass them through ([`api-client.md`](api-client.md)).
 - Answers follow the same pattern.
-- `choice`, `score` and `noul` exist. The unknown-type variant arrives with `ask_jev`, which needs it.
+- A known type whose fields don't fit the typed shape (for example an object as `instructions`, which the API accepts) is also kept as raw JSON. The local checks still apply to it where they can: option and level counts, and `noul` criteria keys.
 - Error bodies get their own types for `400` (`detail`) and `422` (`detail[]` with `loc`, `msg`).
 
 Validating against the spec:

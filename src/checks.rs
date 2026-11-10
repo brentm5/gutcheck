@@ -1,7 +1,7 @@
 //! Shallow checks that run before a request is sent. The API is the final
 //! authority, so these never reject what it would accept. See `docs/api-client.md`.
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::api::{Question, SystemOneRequest};
 use crate::error::Error;
@@ -37,20 +37,48 @@ pub const MAX_SCORE_LEVELS: usize = 10;
 
 fn check_question(question: &Question) -> Result<(), String> {
     match question {
-        Question::Choice { criteria, .. } if criteria.is_empty() => {
-            Err("choice needs at least 1 option".to_owned())
+        Question::Choice { criteria, .. } => check_option_count(criteria.len()),
+        Question::Score { criteria, .. } => check_level_count(criteria.len()),
+        // `noul` criteria can only hold `true` and `false` by construction.
+        Question::Noul { .. } => Ok(()),
+        Question::Other(fields) => check_raw_question(fields),
+    }
+}
+
+/// The same rules for a question kept as raw JSON: one of a known type whose
+/// values don't fit our types, such as an object as an option description.
+/// Unknown types, and anything else the API must judge, pass.
+fn check_raw_question(fields: &Map<String, Value>) -> Result<(), String> {
+    match (
+        fields.get("type").and_then(Value::as_str),
+        fields.get("criteria"),
+    ) {
+        (Some("choice"), Some(Value::Object(options))) => check_option_count(options.len()),
+        (Some("score"), Some(Value::Array(levels))) => check_level_count(levels.len()),
+        (Some("noul"), Some(Value::Object(meanings)))
+            if meanings.keys().any(|key| key != "true" && key != "false") =>
+        {
+            Err("noul criteria may only have true and false keys".to_owned())
         }
-        Question::Choice { criteria, .. } if criteria.len() > MAX_CHOICE_OPTIONS => Err(format!(
+        _ => Ok(()),
+    }
+}
+
+fn check_option_count(options: usize) -> Result<(), String> {
+    match options {
+        0 => Err("choice needs at least 1 option".to_owned()),
+        n if n > MAX_CHOICE_OPTIONS => Err(format!(
             "choice allows at most {MAX_CHOICE_OPTIONS} options"
         )),
-        Question::Score { criteria, .. } if criteria.is_empty() => {
-            Err("score needs at least 1 level".to_owned())
-        }
-        Question::Score { criteria, .. } if criteria.len() > MAX_SCORE_LEVELS => {
-            Err(format!("score allows at most {MAX_SCORE_LEVELS} levels"))
-        }
-        // `noul` criteria can only hold `true` and `false` by construction.
-        Question::Choice { .. } | Question::Noul { .. } | Question::Score { .. } => Ok(()),
+        _ => Ok(()),
+    }
+}
+
+fn check_level_count(levels: usize) -> Result<(), String> {
+    match levels {
+        0 => Err("score needs at least 1 level".to_owned()),
+        n if n > MAX_SCORE_LEVELS => Err(format!("score allows at most {MAX_SCORE_LEVELS} levels")),
+        _ => Ok(()),
     }
 }
 

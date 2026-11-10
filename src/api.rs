@@ -3,9 +3,12 @@
 
 use std::collections::BTreeMap;
 
+use serde::de::{MapAccess, Visitor};
 use serde::ser::SerializeMap;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Number, Value};
+
+use crate::error::Error;
 
 /// The body of `POST /v1/systemone`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -15,12 +18,64 @@ pub struct SystemOneRequest {
     pub questions: BTreeMap<String, Question>,
 }
 
-/// A single question, tagged on `type` in JSON.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// A request as a caller writes it: the body of `POST /v1/systemone`, where
+/// `model` may be left out to use the configured one. The MCP tool reads it from
+/// JSON with [`AskRequest::from_json`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct AskRequest {
+    pub model: Option<String>,
+    pub state: Value,
+    pub questions: BTreeMap<String, Question>,
+}
+
+impl AskRequest {
+    /// Reads a request from its JSON fields. A missing `state` is left for the
+    /// local checks to report; anything else that has the wrong shape is
+    /// reported here, naming the field.
+    pub fn from_json(mut fields: Map<String, Value>) -> Result<Self, Error> {
+        let model = match fields.remove("model") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(model)) => Some(model),
+            Some(_) => return Err(Error::Usage("model: must be a string".to_owned())),
+        };
+        let state = fields.remove("state").unwrap_or(Value::Null);
+        let questions = match fields.remove("questions") {
+            None | Some(Value::Null) => Map::new(),
+            Some(Value::Object(questions)) => questions,
+            Some(_) => {
+                return Err(Error::Usage(
+                    "questions: must be an object keyed by question ID".to_owned(),
+                ));
+            }
+        };
+        let questions = questions
+            .into_iter()
+            .map(|(id, question)| {
+                if !question.is_object() {
+                    return Err(Error::Usage(format!("questions.{id}: must be an object")));
+                }
+                let question = serde_json::from_value(question)
+                    .map_err(|e| Error::Usage(format!("questions.{id}: {e}")))?;
+                Ok((id, question))
+            })
+            .collect::<Result<_, Error>>()?;
+        Ok(Self {
+            model,
+            state,
+            questions,
+        })
+    }
+}
+
+/// A single question, tagged on `type` in JSON. A question of a type
+/// `gutcheck` doesn't know, or one whose fields don't fit these types, is kept
+/// as raw JSON in [`Question::Other`] and sent as is, for the API to judge.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Question {
     Choice {
         instructions: String,
+        #[serde(default)]
         criteria: ChoiceCriteria,
     },
     Noul {
@@ -31,8 +86,12 @@ pub enum Question {
     Score {
         instructions: String,
         /// The level descriptions, lowest first. A level's position is its score.
+        #[serde(default)]
         criteria: Vec<String>,
     },
+    /// Any other question, including its `type`, unchanged.
+    #[serde(untagged)]
+    Other(Map<String, Value>),
 }
 
 impl Question {
@@ -61,13 +120,15 @@ impl Question {
         }
     }
 
-    /// The question's type as the API names it. A CLI request holds one question
-    /// and uses this as its ID, so API errors read `questions.noul.criteria: ...`.
-    pub(crate) fn kind(&self) -> &'static str {
+    /// The question's type as the API names it, or `None` for [`Question::Other`].
+    /// A CLI request holds one question and uses this as its ID, so API errors
+    /// read `questions.noul.criteria: ...`.
+    pub(crate) fn kind(&self) -> Option<&'static str> {
         match self {
-            Question::Choice { .. } => "choice",
-            Question::Noul { .. } => "noul",
-            Question::Score { .. } => "score",
+            Question::Choice { .. } => Some("choice"),
+            Question::Noul { .. } => Some("noul"),
+            Question::Score { .. } => Some("score"),
+            Question::Other(_) => None,
         }
     }
 }
@@ -88,6 +149,30 @@ impl ChoiceCriteria {
     }
 }
 
+impl<'de> Deserialize<'de> for ChoiceCriteria {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Options;
+
+        impl<'de> Visitor<'de> for Options {
+            type Value = ChoiceCriteria;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an object of option keys")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut options = Vec::with_capacity(map.size_hint().unwrap_or(0));
+                while let Some(option) = map.next_entry()? {
+                    options.push(option);
+                }
+                Ok(ChoiceCriteria(options))
+            }
+        }
+
+        deserializer.deserialize_map(Options)
+    }
+}
+
 impl Serialize for ChoiceCriteria {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(Some(self.0.len()))?;
@@ -99,7 +184,8 @@ impl Serialize for ChoiceCriteria {
 }
 
 /// What counts as a yes and a no for a `noul` question.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NoulCriteria {
     #[serde(rename = "true", skip_serializing_if = "Option::is_none")]
     pub if_true: Option<String>,
@@ -136,15 +222,19 @@ pub enum Answer {
         #[serde(flatten)]
         extra: Map<String, Value>,
     },
+    /// An answer to a question of another type, including its `type`, unchanged.
+    #[serde(untagged)]
+    Other(Map<String, Value>),
 }
 
 impl Answer {
     /// The answer's type as the API names it, matching [`Question::kind`].
-    pub(crate) fn kind(&self) -> &'static str {
+    pub(crate) fn kind(&self) -> Option<&'static str> {
         match self {
-            Answer::Choice { .. } => "choice",
-            Answer::Noul { .. } => "noul",
-            Answer::Score { .. } => "score",
+            Answer::Choice { .. } => Some("choice"),
+            Answer::Noul { .. } => Some("noul"),
+            Answer::Score { .. } => Some("score"),
+            Answer::Other(_) => None,
         }
     }
 
@@ -152,7 +242,7 @@ impl Answer {
     pub fn choice(&self) -> Option<&str> {
         match self {
             Answer::Choice { choice, .. } => Some(choice),
-            Answer::Noul { .. } | Answer::Score { .. } => None,
+            Answer::Noul { .. } | Answer::Score { .. } | Answer::Other(_) => None,
         }
     }
 
@@ -160,7 +250,7 @@ impl Answer {
     pub fn probability(&self) -> Option<f64> {
         match self {
             Answer::Noul { noul, .. } => Some(number(noul)),
-            Answer::Choice { .. } | Answer::Score { .. } => None,
+            Answer::Choice { .. } | Answer::Score { .. } | Answer::Other(_) => None,
         }
     }
 
@@ -168,7 +258,7 @@ impl Answer {
     pub fn score(&self) -> Option<f64> {
         match self {
             Answer::Score { score, .. } => Some(number(score)),
-            Answer::Choice { .. } | Answer::Noul { .. } => None,
+            Answer::Choice { .. } | Answer::Noul { .. } | Answer::Other(_) => None,
         }
     }
 }

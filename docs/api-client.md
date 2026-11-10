@@ -2,7 +2,7 @@
 
 > **Status:** draft.
 
-Every `gutcheck ask` subcommand, `gutcheck ask raw` and the `ask_jev` MCP tool send requests through the same client code. This doc covers what that code checks before it sends a request, and how it handles errors from the API.
+Every `gutcheck ask` subcommand, `gutcheck ask raw` and the `gutcheck_ask` MCP tool send requests through the same client code. This doc covers what that code checks before it sends a request, and how it handles errors from the API.
 
 ## Principle
 
@@ -39,7 +39,7 @@ These run before any request is sent. Limits come from TypeSafe's [OpenAPI spec]
 | `noul`       | `criteria`, if present, is an object with only `true` and/or `false` keys |
 | Unknown type | Not checked locally. Passed to the API as is                              |
 
-Passing unknown types through keeps `ask_jev` and `gutcheck ask raw` working when TypeSafe adds new question types (the API already has `box`, for images).
+Passing unknown types through keeps `gutcheck_ask` and `gutcheck ask raw` working when TypeSafe adds new question types (the API already has `box`, for images).
 
 Things we leave to the API: nesting depth, the model's context length, whether the model name exists, and anything else not listed above.
 
@@ -67,8 +67,6 @@ Redirects aren't followed. A `3xx` is reported as an unexpected response and isn
 For `422`, the `loc` path starts with `"body"`. We drop that prefix and join the rest with dots so the path matches the field names the caller used.
 
 If a `400` or `422` body doesn't have the documented shape, or its `detail` or every `msg` is empty, the error is reported as `unexpected API response (HTTP <status>)`. So is a `2xx` response without a usable answer, using the message `unexpected API response: it has no usable answer`. Neither is retried, and `--verbose` shows the body.
-
-**Not implemented yet:** the pass-through for unknown question types arrives with `ask_jev`.
 
 With `--verbose`, errors are printed in full (status code and raw body), which helps when the API's error doesn't fit the mapping above.
 

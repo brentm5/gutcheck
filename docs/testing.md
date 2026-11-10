@@ -61,9 +61,11 @@ In `tests/`, using assert_cmd to run the real `gutcheck` binary against wiremock
 
 Start the MCP server in-process and connect an rmcp client to it over an in-memory transport.
 
-- `tools/list` returns `ask_jev`. Its description and input schema are snapshot-tested with insta.
-- Calling `ask_jev` against wiremock returns only `answers`.
-- Local check failures and API errors come back as tool errors.
+- `tools/list` returns `gutcheck_ask`. Its description and input schema are snapshot-tested with insta.
+- Calling `gutcheck_ask` against wiremock returns only `answers`, including for several questions in one call.
+- The `model` argument overrides the configured model; without it, the configured model is sent.
+- Unknown question types pass through to the API unchanged.
+- Local check failures and API errors come back as tool errors, and failed local checks send no request.
 
 ### 5. Spec tests
 

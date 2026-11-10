@@ -1,0 +1,67 @@
+---
+source: src/mcp/tests.rs
+expression: tool.input_schema
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AskInput",
+  "type": "object",
+  "properties": {
+    "state": {
+      "description": "The input the questions are about: text, or a JSON object or array",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "additionalProperties": true
+        },
+        {
+          "type": "array",
+          "items": true
+        }
+      ]
+    },
+    "questions": {
+      "description": "Questions keyed by an ID you choose; answers come back under the same IDs",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "description": "`choice`, `score` or `noul`",
+            "type": "string",
+            "enum": [
+              "choice",
+              "score",
+              "noul"
+            ]
+          },
+          "instructions": {
+            "description": "The question or statement to evaluate",
+            "type": "string"
+          },
+          "criteria": {
+            "description": "Options (choice), ordered levels (score), or optional true/false meanings (noul)"
+          }
+        },
+        "required": [
+          "type",
+          "instructions"
+        ]
+      }
+    },
+    "model": {
+      "description": "Optional. Overrides the configured model for this call",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "state",
+    "questions"
+  ]
+}
