@@ -75,13 +75,13 @@ report() {
 expect_success() {
   [[ $status -eq 0 ]] || fail "expected exit 0"
   [[ $out_lines -eq 1 && -n $out ]] || fail "expected one line on stdout"
-  [[ -z $err ]] || fail "expected nothing on stderr"
+  [[ ! -s $err_file ]] || fail "expected nothing on stderr"
 }
 
 # Checks shared by every error: exit 1, no stdout, one stderr line.
 expect_error() {
   [[ $status -eq 1 ]] || fail "expected exit 1"
-  [[ -z $out ]] || fail "expected nothing on stdout"
+  [[ ! -s $out_file ]] || fail "expected nothing on stdout"
   [[ $err_lines -eq 1 && -n $err ]] || fail "expected one line on stderr"
 }
 
@@ -91,9 +91,9 @@ in_range() {
     '($v | tonumber? // null) as $n | $n != null and $n >= $min and $n <= $max' >/dev/null 2>&1
 }
 
-# json_check FILTER : stdout is valid JSON for which FILTER is true.
+# json_check FILTER : stdout is exactly one JSON value, for which FILTER is true.
 json_check() {
-  jq -e "$1" <<<"$out" >/dev/null 2>&1
+  jq -se "length == 1 and (.[0] | $1)" "$out_file" >/dev/null 2>&1
 }
 
 YES_STATE="The sky is blue and water is wet."
@@ -157,7 +157,7 @@ report "score: --json with state on stdin"
 
 run -- auth validate
 [[ $status -eq 0 ]] || fail "expected exit 0"
-[[ -z $out && -z $err ]] || fail "expected no output"
+[[ ! -s $out_file && ! -s $err_file ]] || fail "expected no output"
 report "auth validate: real key accepted"
 
 echo "== Answer sanity"
