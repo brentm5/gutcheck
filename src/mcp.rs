@@ -49,7 +49,7 @@ you can fix the request and retry."#;
 #[allow(dead_code)]
 struct AskInput {
     /// The input the questions are about: text, or a JSON object or array
-    state: State,
+    state: Json,
     /// Questions keyed by an ID you choose; answers come back under the same IDs
     questions: BTreeMap<String, QuestionInput>,
     /// Optional. Overrides the configured model for this call
@@ -59,7 +59,7 @@ struct AskInput {
 #[derive(JsonSchema)]
 #[schemars(inline, untagged)]
 #[allow(dead_code)]
-enum State {
+enum Json {
     Text(String),
     Object(Map<String, Value>),
     Array(Vec<Value>),
@@ -72,7 +72,7 @@ struct QuestionInput {
     /// `choice`, `score` or `noul`
     r#type: QuestionType,
     /// The question or statement to evaluate
-    instructions: String,
+    instructions: Option<Json>,
     /// Options (choice), ordered levels (score), or optional true/false meanings (noul)
     criteria: Option<Value>,
 }

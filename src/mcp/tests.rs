@@ -235,7 +235,8 @@ async fn model_argument_overrides_the_configured_model(
 }
 
 /// The API takes any JSON value for instructions and descriptions, and
-/// `instructions` is optional, so these are sent as given.
+/// `instructions` is optional, so these are sent as given, along with fields
+/// `gutcheck` doesn't know.
 #[tokio::test]
 async fn known_types_take_any_json_for_their_text() {
     let server = MockServer::start().await;
@@ -246,7 +247,7 @@ async fn known_types_take_any_json_for_their_text() {
             "criteria": {"billing": {"covers": ["refunds"]}, "other": null},
         },
         "mood": {"type": "score", "criteria": ["Calm", {"level": "Angry"}]},
-        "urgent": {"type": "noul", "criteria": {"true": ["outage", "data loss"]}},
+        "urgent": {"type": "noul", "criteria": {"true": ["outage", "data loss"]}, "future_field": 1},
     });
     let answers = json!({
         "team": {"type": "choice", "choice": "billing"},

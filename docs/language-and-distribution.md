@@ -70,7 +70,7 @@ The types:
 
 - Questions are an enum tagged on `type` (`choice`, `score`, `noul`) with an extra variant that keeps unknown types as raw JSON, so `gutcheck_ask` can pass them through ([`api-client.md`](api-client.md)).
 - Answers follow the same pattern.
-- The known variants' fields match the API rather than what the CLI sends: `instructions` is an optional `serde_json::Value`, and so are option descriptions, score levels and `noul` meanings. The CLI still builds them from strings. We chose this over strict string fields, which would reject requests the API accepts, and over raw JSON for every question, which would lose the typed local checks. A `null` value is sent as left out.
+- The known variants' fields match the API rather than what the CLI sends: `instructions` is an optional `serde_json::Value`, and so are option descriptions, score levels and `noul` meanings. The CLI still builds them from strings. We chose this over strict string fields, which would reject requests the API accepts, and over raw JSON for every question, which would lose the typed local checks. A `null` value is sent as left out. Fields `gutcheck` doesn't read are kept in a flattened map and sent unchanged, so new API fields work without changes.
 - A known type that still doesn't fit (for example `noul` criteria with another key) is kept as raw JSON too, and the local checks still apply to it.
 - Error bodies get their own types for `400` (`detail`) and `422` (`detail[]` with `loc`, `msg`).
 

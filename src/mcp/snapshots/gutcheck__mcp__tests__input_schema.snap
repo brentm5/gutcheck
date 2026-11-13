@@ -40,15 +40,33 @@ expression: tool.input_schema
           },
           "instructions": {
             "description": "The question or statement to evaluate",
-            "type": "string"
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  {
+                    "type": "array",
+                    "items": true
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "criteria": {
             "description": "Options (choice), ordered levels (score), or optional true/false meanings (noul)"
           }
         },
         "required": [
-          "type",
-          "instructions"
+          "type"
         ]
       }
     },

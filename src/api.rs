@@ -80,12 +80,17 @@ pub enum Question {
         instructions: Option<Value>,
         #[serde(default)]
         criteria: ChoiceCriteria,
+        /// Fields `gutcheck` doesn't read, sent back unchanged.
+        #[serde(flatten)]
+        extra: Map<String, Value>,
     },
     Noul {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         instructions: Option<Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         criteria: Option<NoulCriteria>,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
     },
     Score {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -93,6 +98,8 @@ pub enum Question {
         /// The level descriptions, lowest first. A level's position is its score.
         #[serde(default)]
         criteria: Vec<Value>,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
     },
     /// Any other question, including its `type`, unchanged.
     #[serde(untagged)]
@@ -105,6 +112,7 @@ impl Question {
         Question::Choice {
             instructions: Some(instructions.into()),
             criteria,
+            extra: Map::new(),
         }
     }
 
@@ -114,6 +122,7 @@ impl Question {
         Question::Noul {
             instructions: Some(instructions.into()),
             criteria: described.then_some(criteria),
+            extra: Map::new(),
         }
     }
 
@@ -122,6 +131,7 @@ impl Question {
         Question::Score {
             instructions: Some(instructions.into()),
             criteria: levels.into_iter().map(Value::from).collect(),
+            extra: Map::new(),
         }
     }
 
@@ -357,12 +367,16 @@ mod tests {
         );
     }
 
-    /// Known types take any JSON value where the API does, and stay typed so
-    /// the local checks apply. `noul` criteria with another key don't fit.
+    /// Known types take any JSON value where the API does, keep fields
+    /// `gutcheck` doesn't read, and stay typed so the local checks apply. `noul`
+    /// criteria with another key don't fit.
     #[rstest]
     #[case::choice(json!({"type": "choice", "instructions": ["a"], "criteria": {"x": {"y": 1}, "z": null}}), Some("choice"))]
     #[case::score_without_instructions(json!({"type": "score", "criteria": [{"level": 0}]}), Some("score"))]
     #[case::noul(json!({"type": "noul", "instructions": {"q": "?"}, "criteria": {"false": ["no"]}}), Some("noul"))]
+    #[case::choice_extra_fields(json!({"type": "choice", "criteria": {"x": "y"}, "assets": [1], "temperature": 0.2}), Some("choice"))]
+    #[case::score_extra_fields(json!({"type": "score", "criteria": ["a"], "future": {"k": null}}), Some("score"))]
+    #[case::noul_extra_fields(json!({"type": "noul", "instructions": "?", "future": true}), Some("noul"))]
     #[case::noul_other_key(json!({"type": "noul", "criteria": {"maybe": "?"}}), None)]
     #[case::unknown(json!({"type": "box", "instructions": "logo"}), None)]
     fn known_types_take_any_json_text(#[case] question: Value, #[case] kind: Option<&str>) {

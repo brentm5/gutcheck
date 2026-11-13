@@ -41,7 +41,7 @@ These run before any request is sent. Limits come from TypeSafe's [OpenAPI spec]
 
 Passing unknown types through keeps `gutcheck_ask` and `gutcheck ask raw` working when TypeSafe adds new question types (the API already has `box`, for images).
 
-Other values are left to the API, matching its schema: `instructions` is optional, and `instructions`, option descriptions, score levels and `noul` meanings can each be a string, object or array. A known type whose fields still don't fit (for example `noul` criteria with another key) is passed as raw JSON, and the rules above still apply to it.
+Other values and fields are left to the API and sent unchanged, matching its schema: `instructions` is optional, and `instructions`, option descriptions, score levels and `noul` meanings can each be a string, object or array. A known type whose fields still don't fit (for example `noul` criteria with another key) is passed as raw JSON, and the rules above still apply to it.
 
 Things we leave to the API: nesting depth, the model's context length, whether the model name exists, and anything else not listed above.
 
