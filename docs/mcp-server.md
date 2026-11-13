@@ -2,11 +2,11 @@
 
 > **Status:** draft.
 
-`gutcheck mcp serve` runs `gutcheck` as an MCP server over stdio, so agents (Claude Code and others) can call Jev as a tool. It exposes one tool, `ask_jev`.
+`gutcheck mcp serve` runs `gutcheck` as an MCP server over stdio, so agents (Claude Code and others) can call Jev as a tool. It exposes one tool, `gutcheck_ask`.
 
-## Decision: one tool, `ask_jev`
+## Decision: one tool, `gutcheck_ask`
 
-The server exposes a single tool, `ask_jev`. It takes a raw Jev request payload and returns the answers.
+The server exposes a single tool, `gutcheck_ask`. It takes a raw Jev request payload and returns the answers.
 
 We chose this over one tool per question type (`ask_choice`, `ask_score`, `ask_noul`) because:
 
@@ -15,13 +15,13 @@ We chose this over one tool per question type (`ask_choice`, `ask_score`, `ask_n
 - **Less to maintain.** The tool mirrors the API, so new question types or fields work without changes to the tool schema.
 - **Shared code path.** It is the MCP equivalent of the future `gutcheck ask raw` command, and both can share the same request handling.
 
-## Tool: `ask_jev`
+## Tool: `gutcheck_ask`
 
 ### Input
 
 The same shape as the API request body (see [`jev-api.md`](jev-api.md)), without any credentials.
 
-The agent never sees or sends the API key. The `gutcheck mcp serve` process reads `TYPESAFE_API_KEY` from its own environment, set once when the server is registered, and adds the `Authorization` header to each request itself. This keeps the key out of the model's context and transcripts. For example, in Claude Code:
+The agent never sees or sends the API key. The `gutcheck mcp serve` process reads `TYPESAFE_API_KEY` from its own environment, set once when the server is registered, and adds the `Authorization` header to each request itself. This keeps the key out of the model's context and transcripts. The key is read once at startup: without it, `gutcheck mcp serve` exits with the usual missing-key error instead of starting. For example, in Claude Code:
 
 ```json
 {
@@ -64,7 +64,7 @@ Example call:
 }
 ```
 
-`model` is optional. When the agent leaves it out, the server uses the configured model: `--model` on `gutcheck mcp serve`, then the config file, then `jev-latest`.
+`model` is optional. When the agent leaves it out, or sends a blank string, the server uses the configured model: `--model` on `gutcheck mcp serve`, then the config file, then `jev-latest`.
 
 ### Output
 
@@ -79,11 +79,11 @@ Only the `answers` object from the API response, keyed by question ID. `model` a
 
 ### Validation and errors
 
-The server runs the same basic local checks as the CLI before sending a request, and the API makes the final call. Local check failures and API errors are both returned as MCP tool errors with a message naming the field, so the agent can fix its request and try again. See [`api-client.md`](api-client.md).
+The server runs the same basic local checks as the CLI before sending a request, and the API makes the final call. Each call is one operation: `timeout` and `retries` apply per call, as for one CLI command. Local check failures and API errors are both returned as MCP tool errors with a message naming the field, so the agent can fix its request and try again. With `--verbose`, the server also prints API errors in full (status and raw body) to stderr, never to the agent. See [`api-client.md`](api-client.md).
 
 ### Tool documentation
 
-The agent learns how to use `ask_jev` only from what the server sends in `tools/list`: the tool description and the input schema. There is no other channel (the agent skill is CLI-only and not served over MCP), so these two must be enough on their own.
+The agent learns how to use `gutcheck_ask` only from what the server sends in `tools/list`: the tool description and the input schema. There is no other channel (the agent skill is CLI-only and not served over MCP), so these two must be enough on their own.
 
 Both are loaded into every connected agent's context, so they should be complete but short: aim for a few hundred tokens in total.
 

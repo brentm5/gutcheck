@@ -4,13 +4,15 @@ use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
 mod cli;
+mod mcp;
 mod output;
 
-use cli::{AskCommand, AuthCommand, Cli, Command};
+use cli::{AskCommand, AuthCommand, Cli, Command, McpCommand};
 use gutcheck::api::{Answer, ChoiceCriteria, NoulCriteria, Question};
 use gutcheck::{
     Client, Error, MAX_BODY_BYTES, Overrides, Settings, api_key_from_env, check_body_size,
 };
+use serde_json::Value;
 use tokio::io::AsyncReadExt;
 
 fn main() -> ExitCode {
@@ -68,7 +70,7 @@ async fn cli_main() -> ExitCode {
     };
 
     let verbose = cli.global.verbose;
-    match run(cli).await {
+    match run(cli, verbose).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");
@@ -81,7 +83,7 @@ async fn cli_main() -> ExitCode {
     }
 }
 
-async fn run(cli: Cli) -> Result<(), Error> {
+async fn run(cli: Cli, verbose: bool) -> Result<(), Error> {
     let settings = Settings::load(
         cli.global.config.as_deref(),
         Overrides {
@@ -120,8 +122,8 @@ async fn run(cli: Cli) -> Result<(), Error> {
             command: AskCommand::Noul(args),
         }) => {
             let criteria = NoulCriteria {
-                if_true: args.if_true,
-                if_false: args.if_false,
+                if_true: args.if_true.map(Value::from),
+                if_false: args.if_false.map(Value::from),
             };
             let question = Question::noul(args.question, criteria);
             let answer = ask(&settings, args.state, question).await?;
@@ -145,6 +147,13 @@ async fn run(cli: Cli) -> Result<(), Error> {
         }) => {
             let client = Client::new(&settings, &api_key_from_env()?)?;
             client.validate_auth().await
+        }
+        Command::Mcp(cli::McpArgs {
+            command: McpCommand::Serve(_),
+        }) => {
+            // The key is read once, here: agents never see or send it.
+            let client = Client::new(&settings, &api_key_from_env()?)?;
+            mcp::serve(mcp::Server::new(client, verbose)).await
         }
     }
 }
@@ -175,7 +184,10 @@ fn choice_criteria(options: Vec<cli::ChoiceOption>) -> Result<ChoiceCriteria, Er
                 option.key
             )));
         }
-        criteria.push((option.key, option.description));
+        criteria.push((
+            option.key,
+            option.description.map_or(Value::Null, Value::from),
+        ));
     }
     Ok(ChoiceCriteria(criteria))
 }

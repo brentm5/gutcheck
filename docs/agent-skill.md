@@ -31,7 +31,7 @@ TypeSafe publishes its own [agent skill](https://docs.typesafe.ai/agent-skill.md
 
 ## CLI only
 
-The skill covers the CLI only. It isn't served over MCP: agents connected through `gutcheck mcp serve` learn everything they need from the `ask_jev` tool's description and input schema (see [`mcp-server.md`](mcp-server.md)).
+The skill covers the CLI only. It isn't served over MCP: agents connected through `gutcheck mcp serve` learn everything they need from the `gutcheck_ask` tool's description and input schema (see [`mcp-server.md`](mcp-server.md)).
 
 ## Output format
 

@@ -54,6 +54,8 @@ pub(crate) enum Command {
     Ask(AskArgs),
     /// Manage API authentication
     Auth(AuthArgs),
+    /// Run gutcheck as an MCP server
+    Mcp(McpArgs),
 }
 
 #[derive(Debug, Args)]
@@ -68,6 +70,13 @@ pub(crate) struct AskArgs {
 pub(crate) struct AuthArgs {
     #[usage(subcommand)]
     pub command: AuthCommand,
+}
+
+#[derive(Debug, Args)]
+#[usage(args_override_self = false)]
+pub(crate) struct McpArgs {
+    #[usage(subcommand)]
+    pub command: McpCommand,
 }
 
 #[derive(Debug, Subcommands)]
@@ -301,6 +310,23 @@ pub(crate) enum AuthCommand {
 )]
 pub(crate) struct ValidateArgs {}
 
+#[derive(Debug, Subcommands)]
+pub(crate) enum McpCommand {
+    /// Run an MCP server over stdio with the gutcheck_ask tool
+    Serve(ServeArgs),
+}
+
+#[derive(Debug, Args)]
+#[usage(
+    args_override_self = false,
+    output(
+        "mcp",
+        default,
+        help = "MCP JSON-RPC messages over stdio until the client disconnects"
+    )
+)]
+pub(crate) struct ServeArgs {}
+
 /// A CLI duration uses the same parser as configuration, without parser callbacks.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CliDuration(pub Duration);
@@ -436,6 +462,10 @@ mod tests {
             ),
             (&["ask", "score", "How?", "-l", "a", "--boolean"], false),
             (&["auth", "validate"], true),
+            (&["mcp", "serve"], true),
+            (&["mcp", "serve", "--timeout", "10s"], true),
+            (&["mcp", "serve", "--state", "x"], false),
+            (&["mcp"], false),
         ];
 
         // Start every portable check first so they run side by side.

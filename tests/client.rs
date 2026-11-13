@@ -269,7 +269,7 @@ fn noul() -> Question {
     Question::noul(
         "Is it urgent?".to_owned(),
         NoulCriteria {
-            if_true: Some("Yes".to_owned()),
+            if_true: Some("Yes".into()),
             if_false: None,
         },
     )
