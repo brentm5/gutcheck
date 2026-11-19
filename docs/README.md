@@ -16,7 +16,7 @@ The machine-readable implemented CLI contract is [`gutcheck.usage.kdl`](../gutch
 | [`language-and-distribution.md`](language-and-distribution.md) | Rust: libraries, code patterns, tooling, distribution                                             | draft     |
 | [`output-and-exit-codes.md`](output-and-exit-codes.md)         | Plain and `--json` output, exit codes 0 and 1, error output, future filtering ideas               | draft     |
 | [`configuration.md`](configuration.md)                         | Config file (TOML), `model`, `retries`, `timeout`, `base_url`, flag overrides, API key (env only) | draft     |
-| [`mcp-server.md`](mcp-server.md)                               | The `ask_jev` tool: input, output, description and schema docs                                    | draft     |
+| [`mcp-server.md`](mcp-server.md)                               | The `gutcheck_ask` tool: input, output, description and schema docs                               | draft     |
 | [`agent-skill.md`](agent-skill.md)                             | `gutcheck skill`: the embedded agent skill, its format and contents                               | draft     |
 | [`api-client.md`](api-client.md)                               | Local checks before sending, API error handling, retries                                          | draft     |
 | [`testing.md`](testing.md)                                     | Mock server (wiremock), CLI, MCP and spec tests; no live API tests                                | draft     |

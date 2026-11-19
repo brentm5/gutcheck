@@ -15,7 +15,8 @@ use serde_json::Value;
 use tokio::time::Instant;
 
 use crate::api::{
-    Answer, BadRequestBody, Question, SystemOneRequest, SystemOneResponse, ValidationBody,
+    Answer, AskRequest, BadRequestBody, Question, SystemOneRequest, SystemOneResponse,
+    ValidationBody,
 };
 use crate::checks::{BODY_TOO_LARGE, check_body_size, check_request};
 use crate::config::Settings;
@@ -147,12 +148,51 @@ impl Client {
         question: Question,
         deadline: Instant,
     ) -> Result<Answer, Error> {
-        let id = question.kind();
+        let id = question.kind().ok_or_else(|| {
+            Error::Internal("a single question must have a known type".to_owned())
+        })?;
         let request = SystemOneRequest {
             model: self.model.clone(),
             state,
             questions: BTreeMap::from([(id.to_owned(), question)]),
         };
+        let details = self.send_request(request, deadline).await?;
+        take_answer(details, id)
+    }
+
+    /// Sends a whole request and returns every answer, keyed by question ID.
+    /// A `model` that is missing or blank falls back to the configured one.
+    /// Local checks run first, as in [`Client::ask_question`].
+    pub async fn ask(
+        &self,
+        request: AskRequest,
+        deadline: Instant,
+    ) -> Result<BTreeMap<String, Answer>, Error> {
+        let model = request
+            .model
+            .map(|model| model.trim().to_owned())
+            .filter(|model| !model.is_empty())
+            .unwrap_or_else(|| self.model.clone());
+        let request = SystemOneRequest {
+            model,
+            state: request.state,
+            questions: request.questions,
+        };
+        let kinds: BTreeMap<String, Option<&'static str>> = request
+            .questions
+            .iter()
+            .map(|(id, question)| (id.clone(), question.kind()))
+            .collect();
+        let details = self.send_request(request, deadline).await?;
+        take_answers(details, &kinds)
+    }
+
+    /// Checks `request`, then posts it to `/v1/systemone` with retries.
+    async fn send_request(
+        &self,
+        request: SystemOneRequest,
+        deadline: Instant,
+    ) -> Result<HttpDetails, Error> {
         check_request(&request)?;
         // `Bytes` makes each retry's copy of the body a reference count bump.
         let body: Bytes = serde_json::to_vec(&request)
@@ -163,16 +203,14 @@ impl Client {
         drop(request);
 
         let url = format!("{}/v1/systemone", self.base_url);
-        let response = self
-            .send(deadline, || {
-                self.http
-                    .post(&url)
-                    .header(CONTENT_TYPE, "application/json")
-                    .body(body.clone())
-            })
-            .await
-            .map_err(point_to_auth_validate)?;
-        take_answer(response, id)
+        self.send(deadline, || {
+            self.http
+                .post(&url)
+                .header(CONTENT_TYPE, "application/json")
+                .body(body.clone())
+        })
+        .await
+        .map_err(point_to_auth_validate)
     }
 
     /// Sends a request with retries, all before `deadline`. Dropping the future
@@ -343,11 +381,36 @@ fn take_answer(details: HttpDetails, id: &str) -> Result<Answer, Error> {
     let answer = serde_json::from_str::<SystemOneResponse>(&details.body)
         .ok()
         .and_then(|mut response| response.answers.remove(id))
-        .filter(|answer| answer.kind() == id);
-    answer.ok_or_else(|| Error::Rejected {
+        .filter(|answer| answer.kind() == Some(id));
+    answer.ok_or_else(|| no_usable_answer(details))
+}
+
+/// Pulls every answer out of a successful response. Each question in `kinds`
+/// needs an answer, and one of a known type needs an answer of that type.
+fn take_answers(
+    details: HttpDetails,
+    kinds: &BTreeMap<String, Option<&'static str>>,
+) -> Result<BTreeMap<String, Answer>, Error> {
+    let Ok(response) = serde_json::from_str::<SystemOneResponse>(&details.body) else {
+        return Err(no_usable_answer(details));
+    };
+    let usable = kinds.iter().all(|(id, kind)| {
+        response
+            .answers
+            .get(id)
+            .is_some_and(|answer| kind.is_none() || answer.kind() == *kind)
+    });
+    if !usable {
+        return Err(no_usable_answer(details));
+    }
+    Ok(response.answers)
+}
+
+fn no_usable_answer(details: HttpDetails) -> Error {
+    Error::Rejected {
         message: "unexpected API response: it has no usable answer".to_owned(),
         details,
-    })
+    }
 }
 
 fn is_retryable(status: StatusCode) -> bool {
