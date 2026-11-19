@@ -42,22 +42,15 @@ expression: tool.input_schema
             "description": "The question or statement to evaluate",
             "anyOf": [
               {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "object",
-                    "additionalProperties": true
-                  },
-                  {
-                    "type": "array",
-                    "items": true
-                  }
-                ]
+                "type": "string"
               },
               {
-                "type": "null"
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "array",
+                "items": true
               }
             ]
           },

@@ -72,6 +72,7 @@ struct QuestionInput {
     /// `choice`, `score` or `noul`
     r#type: QuestionType,
     /// The question or statement to evaluate
+    #[schemars(with = "Json", default)]
     instructions: Option<Json>,
     /// Options (choice), ordered levels (score), or optional true/false meanings (noul)
     criteria: Option<Value>,
