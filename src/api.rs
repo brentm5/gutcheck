@@ -31,8 +31,15 @@ pub struct AskRequest {
 impl AskRequest {
     /// Reads a request from its JSON fields. A missing `state` is left for the
     /// local checks to report; anything else that has the wrong shape is
-    /// reported here, naming the field.
+    /// reported here, naming the field. Any other top-level field, including the
+    /// API's `assets`, is rejected rather than dropped.
     pub fn from_json(mut fields: Map<String, Value>) -> Result<Self, Error> {
+        if let Some(field) = fields
+            .keys()
+            .find(|key| !matches!(key.as_str(), "model" | "state" | "questions"))
+        {
+            return Err(Error::Usage(format!("{field}: not supported")));
+        }
         let model = match fields.remove("model") {
             None | Some(Value::Null) => None,
             Some(Value::String(model)) => Some(model),
@@ -68,8 +75,9 @@ impl AskRequest {
 }
 
 /// A single question, tagged on `type` in JSON. Text fields take any JSON
-/// value, as the API does (a string, object or array), and a `null` one is sent
-/// as left out. A question of a type `gutcheck` doesn't know, or one whose
+/// value, as the API does (a string, object or array). A `null` `instructions`
+/// or `noul` meaning is sent as left out; a `null` option description or score
+/// level is sent as `null`. A question of a type `gutcheck` doesn't know, or one whose
 /// fields don't fit these types, is kept as raw JSON in [`Question::Other`] and
 /// sent as is, for the API to judge.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -19,7 +19,7 @@ We chose this over one tool per question type (`ask_choice`, `ask_score`, `ask_n
 
 ### Input
 
-The same shape as the API request body (see [`jev-api.md`](jev-api.md)), without any credentials.
+The same shape as the API request body (see [`jev-api.md`](jev-api.md)), without any credentials. Only `state`, `questions` and `model` are accepted: any other top-level field, including the API's `assets`, is a tool error naming it (for example `assets: not supported`) rather than being dropped.
 
 The agent never sees or sends the API key. The `gutcheck mcp serve` process reads `TYPESAFE_API_KEY` from its own environment, set once when the server is registered, and adds the `Authorization` header to each request itself. This keeps the key out of the model's context and transcripts. The key is read once at startup: without it, `gutcheck mcp serve` exits with the usual missing-key error instead of starting. For example, in Claude Code:
 
@@ -64,7 +64,7 @@ Example call:
 }
 ```
 
-`model` is optional. When the agent leaves it out, or sends a blank string, the server uses the configured model: `--model` on `gutcheck mcp serve`, then the config file, then `jev-latest`.
+`model` is optional. Leading and trailing whitespace is trimmed from it. When the agent leaves it out, or sends a blank string, the server uses the configured model: `--model` on `gutcheck mcp serve`, then the config file, then `jev-latest`.
 
 ### Output
 

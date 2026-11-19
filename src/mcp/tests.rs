@@ -31,6 +31,10 @@ struct Connection {
 
 impl Connection {
     async fn start(base_url: &str) -> Self {
+        Self::start_with(base_url, false).await
+    }
+
+    async fn start_with(base_url: &str, verbose: bool) -> Self {
         let settings = Settings {
             model: CONFIGURED_MODEL.to_owned(),
             retries: 2,
@@ -43,7 +47,7 @@ impl Connection {
         let (server_side, client_side) = tokio::io::duplex(64 * 1024);
         let server = tokio::spawn(async move {
             let running: RunningService<RoleServer, Server> =
-                Server::new(api, false).serve(server_side).await.unwrap();
+                Server::new(api, verbose).serve(server_side).await.unwrap();
             running.waiting().await.unwrap();
         });
         let client = ().serve(client_side).await.unwrap();
@@ -331,6 +335,14 @@ async fn unknown_question_types_pass_through_unchanged() {
     json!({"model": 1, "state": "text", "questions": {"urgent": urgent()}}),
     "model: must be a string"
 )]
+#[case::assets(
+    json!({"state": "text", "questions": {"urgent": urgent()}, "assets": {"img": "data:image/png;base64,AA=="}}),
+    "assets: not supported"
+)]
+#[case::unknown_top_level_field(
+    json!({"state": "text", "questions": {"urgent": urgent()}, "temperature": 0}),
+    "temperature: not supported"
+)]
 #[case::no_choice_options(
     json!({"state": "text", "questions": {"team": {"type": "choice", "instructions": "Which?", "criteria": {}}}}),
     "questions.team: choice needs at least 1 option"
@@ -420,6 +432,51 @@ async fn a_missing_answer_is_a_tool_error() {
     assert_eq!(
         tool_error(&result),
         "unexpected API response: it has no usable answer"
+    );
+    connection.stop().await;
+}
+
+#[tokio::test]
+async fn an_unknown_tool_is_invalid_params() {
+    let server = MockServer::start().await;
+    let connection = Connection::start(&server.uri()).await;
+
+    let error = connection
+        .client
+        .peer()
+        .call_tool(CallToolRequestParams::new("other_tool"))
+        .await
+        .unwrap_err();
+
+    let rmcp::ServiceError::McpError(error) = error else {
+        panic!("expected an MCP error, got {error:?}");
+    };
+    assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+    assert_eq!(error.message, "unknown tool: other_tool");
+    connection.stop().await;
+}
+
+/// `--verbose` prints the HTTP status and body to stderr, never into the tool
+/// result the agent reads.
+#[tokio::test]
+async fn verbose_keeps_error_details_out_of_the_tool_result() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(422).set_body_string(include_str!(
+            "../../tests/fixtures/validation_error_422.json"
+        )))
+        .mount(&server)
+        .await;
+    let connection = Connection::start_with(&server.uri(), true).await;
+
+    let result = connection
+        .call(json!({"state": "text", "questions": {"urgent": urgent()}}))
+        .await;
+
+    assert_eq!(
+        tool_error(&result),
+        "questions.noul.criteria: Field required"
     );
     connection.stop().await;
 }
