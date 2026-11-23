@@ -283,13 +283,19 @@ fn point_to_auth_validate(error: Error) -> Error {
     }
 }
 
-/// `detail` from a `400` body, which is a string or an object. An empty one says
-/// nothing, so it counts as unreadable.
+/// `detail` from a `400` body, which is a string or an object. An object with a
+/// non-empty string `message` is reported as that message, and any other object as
+/// its JSON. An empty one says nothing, so it counts as unreadable.
 fn bad_request_message(body: &str) -> Option<String> {
     let body: BadRequestBody = serde_json::from_str(body).ok()?;
     match body.detail {
         Value::String(detail) => Some(one_line(&detail)).filter(|text| !text.is_empty()),
-        Value::Object(ref fields) if !fields.is_empty() => Some(one_line(&body.detail.to_string())),
+        Value::Object(ref fields) if !fields.is_empty() => fields
+            .get("message")
+            .and_then(Value::as_str)
+            .map(one_line)
+            .filter(|message| !message.is_empty())
+            .or_else(|| Some(one_line(&body.detail.to_string()))),
         _ => None,
     }
 }
@@ -441,6 +447,28 @@ mod tests {
             message_for(400, r#"{"detail":{"code":"nesting"}}"#),
             r#"{"code":"nesting"}"#
         );
+    }
+
+    #[test]
+    fn bad_request_object_details_report_their_message() {
+        assert_eq!(
+            message_for(
+                400,
+                r#"{"detail":{"error_type":"x","message":"Unknown model: m"}}"#
+            ),
+            "Unknown model: m"
+        );
+        // Without a usable message, the whole object is reported.
+        for detail in [
+            r#"{"error_type":"x","message":""}"#,
+            r#"{"error_type":"x","message":"\n "}"#,
+            r#"{"error_type":"x","message":7}"#,
+        ] {
+            assert_eq!(
+                message_for(400, &format!(r#"{{"detail":{detail}}}"#)),
+                detail
+            );
+        }
     }
 
     #[test]
