@@ -327,15 +327,28 @@ fn point_to_auth_validate(error: Error) -> Error {
 fn bad_request_message(body: &str) -> Option<String> {
     let body: BadRequestBody = serde_json::from_str(body).ok()?;
     match body.detail {
-        Value::String(detail) => Some(one_line(&detail)).filter(|text| !text.is_empty()),
-        Value::Object(ref fields) if !fields.is_empty() => fields
-            .get("message")
-            .and_then(Value::as_str)
-            .map(one_line)
-            .filter(|message| !message.is_empty())
-            .or_else(|| Some(one_line(&body.detail.to_string()))),
+        Value::String(detail) => {
+            // The real API sends an unknown model as a string holding a JSON
+            // object, so look for its message there too.
+            let embedded = serde_json::from_str::<Value>(&detail)
+                .ok()
+                .and_then(|value| object_message(&value));
+            embedded.or_else(|| Some(one_line(&detail)).filter(|text| !text.is_empty()))
+        }
+        Value::Object(ref fields) if !fields.is_empty() => {
+            object_message(&body.detail).or_else(|| Some(one_line(&body.detail.to_string())))
+        }
         _ => None,
     }
+}
+
+/// The non-empty string `message` of a JSON object, on one line.
+fn object_message(value: &Value) -> Option<String> {
+    value
+        .get("message")
+        .and_then(Value::as_str)
+        .map(one_line)
+        .filter(|message| !message.is_empty())
 }
 
 /// Each entry in a `422` body as `<loc>: <msg>`, joined so the error stays on
@@ -532,6 +545,21 @@ mod tests {
                 detail
             );
         }
+    }
+
+    #[test]
+    fn bad_request_string_details_holding_json_report_their_message() {
+        let detail = r#"{"error_type":"x","message":"Unknown model: m"}"#;
+        assert_eq!(
+            message_for(400, &serde_json::json!({ "detail": detail }).to_string()),
+            "Unknown model: m"
+        );
+        // Without a usable message, the string is reported as it is.
+        let detail = r#"{"error_type":"x","message":""}"#;
+        assert_eq!(
+            message_for(400, &serde_json::json!({ "detail": detail }).to_string()),
+            detail
+        );
     }
 
     #[test]

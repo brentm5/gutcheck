@@ -409,6 +409,7 @@ async fn ask_runs_local_checks_before_sending(
 #[rstest]
 #[case::bad_request(400, include_str!("fixtures/bad_request_400.json"), "max_tokens_exceeded")]
 #[case::bad_request_object(400, include_str!("fixtures/bad_request_object_400.json"), "Unknown model: does-not-exist")]
+#[case::bad_request_json_string(400, include_str!("fixtures/bad_request_json_string_400.json"), "Unknown model: does-not-exist")]
 #[case::unauthorized(
     401,
     "",
