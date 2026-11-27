@@ -101,7 +101,7 @@ The cases live in one bash script, `evals/run.sh`, which checks JSON with `jq`. 
 
 Local checks and the other error cases are covered by the mocked tests and are not repeated here. A mock-backed mode would repeat `tests/cli.rs`, so there isn't one.
 
-When a later command lands (`mcp serve`, `skill`), its change adds eval cases for it.
+`mcp serve` has landed without eval cases. When a later command lands (`skill`), its change adds eval cases for it.
 
 ## Running tests
 
