@@ -6,7 +6,7 @@
 
 The Rust declarations in [`src/cli.rs`](../src/cli.rs) define the executable CLI with [usage-rs](https://usage.jdx.dev/rust/quickstart) 7.3.0. The same declarations generate [`gutcheck.usage.kdl`](../gutcheck.usage.kdl), including flag constraints, output modes and package metadata from Cargo. Regenerate it with `mise run spec:usage`; do not edit it by hand. A test compares the checked-in spec with the executable's `__usage_spec__` output.
 
-The generated spec can produce documentation and shell completions for the implemented commands: `ask choice`, `ask noul`, `ask score` and `auth validate`. Planned commands in the tree below are documented here until their Rust declarations and handlers exist. Input selection, duplicate option-key checks, API validation and output formatting remain application responsibilities.
+The generated spec can produce documentation and shell completions for the implemented commands: `ask choice`, `ask noul`, `ask score`, `auth validate` and `mcp serve`. Planned commands in the tree below are documented here until their Rust declarations and handlers exist. Input selection, duplicate option-key checks, API validation and output formatting remain application responsibilities.
 
 Run `mise run lint:usage` to validate it. See [`development.md`](development.md#usage-specification) for artifact generation commands.
 
@@ -79,7 +79,7 @@ Checks that `TYPESAFE_API_KEY` is set and accepted by the API. It prints nothing
 
 ### `gutcheck mcp serve`
 
-Starts a stdio MCP server that exposes a single `ask_jev` tool, which takes a raw Jev request payload. Details are in [`mcp-server.md`](mcp-server.md).
+Starts a stdio MCP server that exposes a single `gutcheck_ask` tool, which takes a raw Jev request payload. Details are in [`mcp-server.md`](mcp-server.md).
 
 ### `gutcheck skill`
 
