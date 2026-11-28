@@ -19,7 +19,7 @@ The machine-readable implemented CLI contract is [`gutcheck.usage.kdl`](../gutch
 | [`mcp-server.md`](mcp-server.md)                               | The `gutcheck_ask` tool: input, output, description and schema docs                               | draft     |
 | [`agent-skill.md`](agent-skill.md)                             | `gutcheck skill`: the embedded agent skill, its format and contents                               | draft     |
 | [`api-client.md`](api-client.md)                               | Local checks before sending, API error handling, retries                                          | draft     |
-| [`testing.md`](testing.md)                                     | Mock server (wiremock), CLI, MCP and spec tests; no live API tests                                | draft     |
+| [`testing.md`](testing.md)                                     | Mock server (wiremock), CLI, MCP and spec tests; manual evaluations against the live API          | draft     |
 | [`development.md`](development.md)                             | mise tool and task setup, Markdown linting with rumdl                                             | draft     |
 
 ## Open questions

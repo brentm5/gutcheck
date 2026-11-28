@@ -122,6 +122,8 @@ fn response_fixtures_match_the_spec_and_our_types(#[case] body: &str, #[case] id
 
 #[rstest]
 #[case::bad_request("HTTPBadRequestError", include_str!("fixtures/bad_request_400.json"))]
+#[case::bad_request_object("HTTPBadRequestError", include_str!("fixtures/bad_request_object_400.json"))]
+#[case::bad_request_json_string("HTTPBadRequestError", include_str!("fixtures/bad_request_json_string_400.json"))]
 #[case::validation("HTTPValidationError", include_str!("fixtures/validation_error_422.json"))]
 fn error_fixtures_match_the_spec(#[case] schema: &str, #[case] body: &str) {
     assert_valid(schema, &serde_json::from_str(body).unwrap());

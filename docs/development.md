@@ -9,12 +9,12 @@ mise install    # install the pinned tools
 mise tasks      # list available tasks
 ```
 
-| Tool                                                 | Purpose                                                 | Config               |
-| ---------------------------------------------------- | ------------------------------------------------------- | -------------------- |
-| [rumdl](https://github.com/rvben/rumdl)              | Lint and format Markdown                                | `.rumdl.toml`        |
-| Rust (with clippy and rustfmt)                       | Build, lint and format the CLI                          | `Cargo.toml`         |
-| [Usage](https://usage.jdx.dev/guide/getting-started) | Validate the CLI spec and generate docs and completions | `gutcheck.usage.kdl` |
-| [jq](https://jqlang.org/)                            | Check and pretty-print the downloaded OpenAPI spec      | —                    |
+| Tool                                                 | Purpose                                                                                      | Config               |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------- |
+| [rumdl](https://github.com/rvben/rumdl)              | Lint and format Markdown                                                                     | `.rumdl.toml`        |
+| Rust (with clippy and rustfmt)                       | Build, lint and format the CLI                                                               | `Cargo.toml`         |
+| [Usage](https://usage.jdx.dev/guide/getting-started) | Validate the CLI spec and generate docs and completions                                      | `gutcheck.usage.kdl` |
+| [jq](https://jqlang.org/)                            | Check and pretty-print the downloaded OpenAPI spec, and check JSON in the manual evaluations | —                    |
 
 Rust is pinned in `mise.toml`; see [`language-and-distribution.md`](language-and-distribution.md) for libraries and patterns.
 
@@ -25,20 +25,21 @@ cargo run -- --version        # run it
 
 ## Tasks
 
-| Task                   | What it does                                                                        |
-| ---------------------- | ----------------------------------------------------------------------------------- |
-| `mise run lint`        | Run all linters                                                                     |
-| `mise run fmt`         | Run all formatters                                                                  |
-| `mise run lint:md`     | Lint Markdown with `rumdl check`                                                    |
-| `mise run fmt:md`      | Format Markdown with `rumdl fmt`                                                    |
-| `mise run lint:rust`   | Lint Rust with `cargo clippy` (warnings are errors)                                 |
-| `mise run lint:usage`  | Validate `gutcheck.usage.kdl`, treating warnings as errors                          |
-| `mise run fmt:rust`    | Format Rust with `cargo fmt`                                                        |
-| `mise run build`       | Build the release binary at `target/release/gutcheck` with `cargo build --release`  |
-| `mise run test`        | Run all tests with `cargo test`                                                     |
-| `mise run lock`        | Update `mise.lock` for Linux and macOS after changing a tool version in `mise.toml` |
-| `mise run spec:usage`  | Regenerate the Usage spec from the executable's Rust declarations                   |
-| `mise run spec:update` | Download the latest OpenAPI spec to `spec/openapi.json`, pretty-printed with `jq`   |
+| Task                   | What it does                                                                                         |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| `mise run lint`        | Run all linters                                                                                      |
+| `mise run fmt`         | Run all formatters                                                                                   |
+| `mise run lint:md`     | Lint Markdown with `rumdl check`                                                                     |
+| `mise run fmt:md`      | Format Markdown with `rumdl fmt`                                                                     |
+| `mise run lint:rust`   | Lint Rust with `cargo clippy` (warnings are errors)                                                  |
+| `mise run lint:usage`  | Validate `gutcheck.usage.kdl`, treating warnings as errors                                           |
+| `mise run fmt:rust`    | Format Rust with `cargo fmt`                                                                         |
+| `mise run build`       | Build the release binary at `target/release/gutcheck` with `cargo build --release`                   |
+| `mise run test`        | Run all tests with `cargo test`                                                                      |
+| `mise run eval`        | Run the manual evaluation suite against the real API ([`testing.md`](testing.md#manual-evaluations)) |
+| `mise run lock`        | Update `mise.lock` for Linux and macOS after changing a tool version in `mise.toml`                  |
+| `mise run spec:usage`  | Regenerate the Usage spec from the executable's Rust declarations                                    |
+| `mise run spec:update` | Download the latest OpenAPI spec to `spec/openapi.json`, pretty-printed with `jq`                    |
 
 `lint` and `fmt` are umbrella tasks. As new tools are added, each gets its own `lint:<name>` and `fmt:<name>` task, which the umbrella tasks depend on.
 

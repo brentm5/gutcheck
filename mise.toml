@@ -40,6 +40,22 @@ run = "cargo build --release"
 description = "Run all tests"
 run = "cargo test"
 
+[tasks.eval]
+description = "Run the manual evaluation suite against the real API (needs TYPESAFE_API_KEY)"
+# Run by hand only, with `fnox exec -- mise run eval`; never part of CI or `test`.
+# Checks the key before building, rather than using `depends`, so a missing key
+# fails right away instead of after a release build.
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -z "${TYPESAFE_API_KEY:-}" ]]; then
+  echo "error: TYPESAFE_API_KEY is not set; run the suite with: fnox exec -- mise run eval" >&2
+  exit 1
+fi
+mise run build
+evals/run.sh
+"""
+
 [tasks.lock]
 description = "Update mise.lock for Linux and macOS after changing a tool version"
 run = "mise lock --platform linux-x64,linux-arm64,macos-x64,macos-arm64"

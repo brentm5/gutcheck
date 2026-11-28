@@ -550,6 +550,34 @@ async fn timeout_covers_waiting_on_stdin() {
 }
 
 #[tokio::test]
+async fn noul_reports_the_message_of_an_object_detail() {
+    let server = MockServer::start().await;
+    let body = include_str!("fixtures/bad_request_object_400.json");
+    mock_systemone(&server, 400, body).await;
+
+    ask_noul(&config_for(&server))
+        .args(["--state", "text", "--model", "does-not-exist"])
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr("error: Unknown model: does-not-exist\n");
+}
+
+#[tokio::test]
+async fn noul_reports_the_message_of_a_json_string_detail() {
+    let server = MockServer::start().await;
+    let body = include_str!("fixtures/bad_request_json_string_400.json");
+    mock_systemone(&server, 400, body).await;
+
+    ask_noul(&config_for(&server))
+        .args(["--state", "text", "--model", "does-not-exist"])
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr("error: Unknown model: does-not-exist\n");
+}
+
+#[tokio::test]
 async fn noul_reports_api_errors_with_verbose_details() {
     let server = MockServer::start().await;
     let body = include_str!("fixtures/validation_error_422.json");
